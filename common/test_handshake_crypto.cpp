@@ -76,8 +76,7 @@ void test_identity_key(const std::filesystem::path & dir)
 	auto path = dir / "sub" / "server_key.pem";
 
 	crypto::key created = wivrn::load_or_create_identity_key(path);
-	struct stat st
-	{};
+	struct stat st; // filled by stat()
 	CHECK(::stat(path.c_str(), &st) == 0);
 	CHECK((st.st_mode & 0777) == 0600);
 
@@ -156,8 +155,7 @@ void test_identity_key_race(const std::filesystem::path & dir)
 	std::ofstream{stale} << "stale";
 	::chmod(stale.c_str(), 0644);
 	wivrn::load_or_create_identity_key(path);
-	struct stat st
-	{};
+	struct stat st; // filled by stat()
 	CHECK(::stat(path.c_str(), &st) == 0);
 	CHECK((st.st_mode & 0777) == 0600);
 }
@@ -237,8 +235,7 @@ void test_trusted_keys(const std::filesystem::path & dir)
 		lines++;
 	CHECK(lines == 2);
 
-	struct stat st
-	{};
+	struct stat st; // filled by stat()
 	CHECK(::stat(path.c_str(), &st) == 0);
 	CHECK((st.st_mode & 0777) == 0600);
 }
