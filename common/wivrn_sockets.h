@@ -23,6 +23,7 @@
 #include "wivrn_serialization.h"
 
 #include <atomic>
+#include <bitset>
 #include <cassert>
 #include <exception>
 #include <fcntl.h>
@@ -108,6 +109,18 @@ class UDP : public fd_base
 	std::array<uint8_t, 16 - sizeof(iv_counter)> recv_iv_header;
 	std::array<uint8_t, 16 - sizeof(iv_counter)> send_iv_header;
 
+	// Replay protection: counters of the packets received recently, relative to the highest one
+	static constexpr uint64_t replay_window = 4096;
+	std::bitset<replay_window> replay_seen;
+	uint64_t replay_highest = 0;
+	bool replay_started = false;
+
+	bool is_replayed(uint64_t counter) const;
+	void mark_received(uint64_t counter);
+	// Decrypt and authenticate a received packet, strips the counter and tag from message.
+	// Returns false if the packet must be dropped (truncated, forged or replayed).
+	bool open_packet(std::span<uint8_t> & message);
+
 public:
 	UDP();
 	explicit UDP(int fd);
@@ -141,6 +154,16 @@ class TCP : public fd_base
 
 	crypto::decrypt_context decrypter;
 	crypto::encrypt_context encrypter;
+	std::array<uint8_t, 16> recv_iv;
+	std::array<uint8_t, 16> send_iv;
+	// Record sequence numbers, mixed into the IV: a dropped, replayed or reordered record fails authentication
+	uint64_t recv_sequence = 0;
+	uint64_t send_sequence = 0;
+
+	// Extract the next complete record from the received data, decrypting and authenticating it
+	deserialization_packet next_record();
+	// Encrypt one record in place, header is the length prefix, authenticated in clear
+	void seal(std::span<uint8_t> header, std::span<std::span<uint8_t>> payload, std::span<uint8_t, crypto::cipher_context::tag_length> tag);
 
 public:
 	TCP() = default;

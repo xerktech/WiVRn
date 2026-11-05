@@ -78,4 +78,9 @@ endif()
 
 target_include_directories(wivrn-common-base PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 target_link_libraries(wivrn-common PUBLIC Boost::pfr OpenSSL::Crypto wivrn-external wivrn-common-base)
+
+if (WIVRN_BUILD_TEST AND NOT ANDROID)
+    add_executable(wivrn_sockets_ut wivrn_sockets_ut.cpp)
+    target_link_libraries(wivrn_sockets_ut wivrn-common)
+endif()
 target_compile_definitions(wivrn-common PUBLIC VULKAN_HPP_NO_STRUCT_CONSTRUCTORS)
