@@ -387,6 +387,23 @@ static void test_udp()
 	CHECK(m.receive() == msg);
 	m.inject(g1); // never delivered, but now > 4096 behind
 	CHECK(m.receive().empty());
+
+	// Advancing the window clears the slots it skips: a packet whose slot was last
+	// used 4096 counters earlier is still accepted
+	std::vector<std::vector<uint8_t>> seq;
+	for (int i = 0; i < 4098; ++i)
+	{
+		m.a.send_raw(make(msg));
+		seq.push_back(m.grab());
+	}
+	m.inject(seq[0]);
+	CHECK(m.receive() == msg);
+	m.inject(seq[4095]);
+	CHECK(m.receive() == msg);
+	m.inject(seq[4097]);
+	CHECK(m.receive() == msg);
+	m.inject(seq[4096]);
+	CHECK(m.receive() == msg);
 }
 
 int main()

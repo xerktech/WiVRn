@@ -575,7 +575,8 @@ wivrn::deserialization_packet wivrn::TCP::receive_raw()
 		                                   4096);
 		auto old = std::move(buffer);
 		buffer = std::make_shared_for_overwrite<uint8_t[]>(new_size);
-		memcpy(buffer.get(), data.data(), data.size_bytes());
+		if (not data.empty())
+			memcpy(buffer.get(), data.data(), data.size_bytes());
 		data = std::span(buffer.get(), data.size());
 		capacity_left = new_size - data.size_bytes();
 	}
