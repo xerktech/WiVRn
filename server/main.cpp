@@ -90,7 +90,14 @@ std::optional<wivrn::typed_socket<wivrn::UnixDatagram, to_monado::packets, from_
 std::filesystem::path socket_path()
 {
 	char sock_file[PATH_MAX];
-	size_t size = u_file_get_path_in_runtime_dir(XRT_IPC_MSG_SOCK_FILENAME, sock_file, PATH_MAX);
+	int size = u_file_get_path_in_runtime_dir(XRT_IPC_MSG_SOCK_FILENAME, sock_file, PATH_MAX);
+
+	// The return value is the length snprintf wanted to write, which can exceed
+	// the buffer: never read past what was actually written.
+	if (size < 0)
+		throw std::system_error(EINVAL, std::system_category(), "Cannot build IPC socket path");
+	if (size >= PATH_MAX)
+		throw std::system_error(ENAMETOOLONG, std::system_category(), "IPC socket path is longer than PATH_MAX, use a shorter XDG_RUNTIME_DIR");
 
 	return {sock_file, sock_file + size};
 }
@@ -100,6 +107,15 @@ int create_listen_socket()
 	sockaddr_un addr{};
 
 	auto sock_file = socket_path();
+
+	// sun_path is a fixed-size array (108 bytes on Linux): refuse paths that do
+	// not fit, including the terminating NUL, instead of overflowing it.
+	if (sock_file.native().size() >= sizeof(addr.sun_path))
+	{
+		std::cerr << "Socket path " << sock_file << " is too long (" << sock_file.native().size()
+		          << " bytes, maximum " << sizeof(addr.sun_path) - 1 << "). Use a shorter XDG_RUNTIME_DIR." << std::endl;
+		throw std::system_error(ENAMETOOLONG, std::system_category());
+	}
 
 	addr.sun_family = AF_UNIX;
 	strcpy(addr.sun_path, sock_file.c_str());
@@ -1076,6 +1092,7 @@ int main(int argc, char * argv[])
 		std::cerr << e.what() << std::endl;
 		if (e.code().category() == avahi_error_category())
 			return wivrn_exit_code::cannot_connect_to_avahi;
+		return wivrn_exit_code::unknown_error;
 	}
 	catch (std::exception & e)
 	{
