@@ -661,6 +661,12 @@ void wivrn::UDP::set_aes_key_and_ivs(std::span<std::uint8_t, 16> key_, std::span
 
 void wivrn::TCP::set_aes_key_and_ivs(std::span<std::uint8_t, 16> key, std::span<std::uint8_t, 16> recv_iv, std::span<std::uint8_t, 16> send_iv)
 {
+	// Bytes already received were not decrypted: accepting them after the key change would let a
+	// peer without the key pre-send "encrypted" packets in plaintext. The handshake never has
+	// pending data at this point.
+	if (not data.empty())
+		throw std::runtime_error("Unexpected data received before encryption was set up");
+
 	encrypter = crypto::encrypt_context{EVP_aes_128_ctr()};
 	encrypter.set_key(key);
 	encrypter.set_iv(send_iv);

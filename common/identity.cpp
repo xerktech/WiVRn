@@ -38,19 +38,19 @@ std::string to_hex(const std::vector<uint8_t> & bytes)
 	return hex;
 }
 
-// Write content to path atomically, readable by the owner only
-void write_private_file(const std::filesystem::path & path, const std::string & content)
+// Write content to a new temporary file next to path, readable by the owner only. A unique
+// name means concurrent writers never share it and a stale file is never reused.
+std::filesystem::path write_temporary_file(const std::filesystem::path & path, const std::string & content)
 {
 	std::filesystem::create_directories(path.parent_path());
 
-	std::filesystem::path tmp = path;
-	tmp += ".new";
-
-	int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	std::string tmp = path.string() + ".XXXXXX";
+	int fd = ::mkstemp(tmp.data()); // created with mode 0600
 	if (fd < 0)
-		throw std::system_error(errno, std::system_category(), "Cannot write " + tmp.string());
+		throw std::system_error(errno, std::system_category(), "Cannot write " + tmp);
 
 	size_t written = 0;
+	int err = 0;
 	while (written < content.size())
 	{
 		ssize_t n = ::write(fd, content.data() + written, content.size() - written);
@@ -58,17 +58,54 @@ void write_private_file(const std::filesystem::path & path, const std::string & 
 		{
 			if (errno == EINTR)
 				continue;
-			int err = errno;
-			::close(fd);
-			throw std::system_error(err, std::system_category(), "Cannot write " + tmp.string());
+			err = errno;
+			break;
 		}
 		written += n;
 	}
 
-	if (::fsync(fd) < 0 or ::close(fd) < 0)
-		throw std::system_error(errno, std::system_category(), "Cannot write " + tmp.string());
+	if (err == 0 and ::fsync(fd) < 0)
+		err = errno;
+	if (::close(fd) < 0 and err == 0)
+		err = errno;
 
-	std::filesystem::rename(tmp, path);
+	if (err != 0)
+	{
+		std::filesystem::remove(tmp);
+		throw std::system_error(err, std::system_category(), "Cannot write " + tmp);
+	}
+
+	return tmp;
+}
+
+// Atomically replace path
+void write_private_file(const std::filesystem::path & path, const std::string & content)
+{
+	auto tmp = write_temporary_file(path, content);
+	std::error_code ec;
+	std::filesystem::rename(tmp, path, ec);
+	if (ec)
+	{
+		std::filesystem::remove(tmp);
+		throw std::system_error(ec, "Cannot write " + path.string());
+	}
+}
+
+// Atomically create path, unless it already exists. Returns false if another writer created it first.
+bool create_private_file(const std::filesystem::path & path, const std::string & content)
+{
+	auto tmp = write_temporary_file(path, content);
+
+	// link() fails with EEXIST instead of overwriting, so the first writer wins
+	int r = ::link(tmp.c_str(), path.c_str());
+	int err = errno;
+	std::filesystem::remove(tmp);
+
+	if (r == 0)
+		return true;
+	if (err == EEXIST)
+		return false;
+	throw std::system_error(err, std::system_category(), "Cannot write " + path.string());
 }
 
 std::string read_file(const std::filesystem::path & path)
@@ -82,15 +119,26 @@ crypto::key wivrn::load_or_create_identity_key(const std::filesystem::path & pat
 {
 	if (std::filesystem::exists(path))
 	{
-		crypto::key key = crypto::key::from_private_key(read_file(path));
+		crypto::key key;
+		try
+		{
+			key = crypto::key::from_private_key(read_file(path));
+		}
+		catch (std::exception & e)
+		{
+			throw std::runtime_error("Cannot read identity key " + path.string() + ": " + e.what());
+		}
 		if (EVP_PKEY_get_base_id(key) != EVP_PKEY_X448)
 			throw std::runtime_error(path.string() + " is not an X448 private key");
 		return key;
 	}
 
 	crypto::key key = crypto::key::generate_x448_keypair();
-	write_private_file(path, key.private_key());
-	return key;
+	if (create_private_file(path, key.private_key()))
+		return key;
+
+	// Lost a race with another connection: use the key it stored
+	return load_or_create_identity_key(path);
 }
 
 bool wivrn::is_trusted_key(const std::filesystem::path & path, const crypto::key & key)

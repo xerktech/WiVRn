@@ -121,7 +121,17 @@ void wivrn_session::handshake(T address, bool tcp_only, crypto::key & headset_ke
 	        .name = application::get_hmd_traits().model_name(),
 	});
 
-	to_headset::crypto_handshake crypto_handshake = std::get<to_headset::crypto_handshake>(receive(10s));
+	to_headset::crypto_handshake crypto_handshake;
+	try
+	{
+		crypto_handshake = std::get<to_headset::crypto_handshake>(receive(10s));
+	}
+	catch (wivrn::deserialization_error & e)
+	{
+		// A server from before the identity key cannot be parsed
+		spdlog::error("Cannot parse server handshake: {}", e.what());
+		throw std::runtime_error(_("Incompatible server version"));
+	}
 
 	// Long-term key of the server, only sent when encryption is enabled
 	crypto::key server_identity;
@@ -231,6 +241,11 @@ void wivrn_session::handshake(T address, bool tcp_only, crypto::key & headset_ke
 		case to_headset::crypto_handshake::crypto_state::incompatible_version:
 			spdlog::error("Incompatible protocol versions");
 			throw std::runtime_error(_("Incompatible server version"));
+
+		default:
+			// The state is not range-checked on deserialization: never fall through to a plaintext session
+			spdlog::error("Invalid crypto state {}", (int)crypto_handshake.state);
+			throw std::runtime_error(_("Invalid server handshake"));
 	}
 
 	// may be on control socket if forced TCP
@@ -238,12 +253,17 @@ void wivrn_session::handshake(T address, bool tcp_only, crypto::key & headset_ke
 
 	// Wait for second handshake
 	auto timeout = std::chrono::steady_clock::now() + 10s;
+	bool handshake_received = false;
 	while (true)
 	{
-		if (poll([](const auto && packet) { return std::is_same_v<std::remove_cvref_t<decltype(packet)>, to_headset::handshake>; }, 100ms))
-		{
+		poll([&](const auto && packet) {
+			if constexpr (std::is_same_v<std::remove_cvref_t<decltype(packet)>, to_headset::handshake>)
+				handshake_received = true;
+		},
+		     100ms);
+
+		if (handshake_received)
 			return;
-		}
 
 		if (std::chrono::steady_clock::now() >= timeout)
 			throw std::runtime_error(_("Timeout"));

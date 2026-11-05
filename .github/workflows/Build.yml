@@ -92,6 +92,7 @@ jobs:
         -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
         --preset ${{ matrix.config.preset }}
         -DWIVRN_USE_SYSTEM_OPENXR=OFF
+        -DWIVRN_BUILD_TEST=ON
 
     - name: Package build dependencies
       if: ${{ matrix.config.preset == 'server' }}
@@ -101,6 +102,10 @@ jobs:
     - name: Build
       # Build your program with the given configuration
       run: cmake --build ${{github.workspace}}/build --config ${{env.BUILD_TYPE}}
+
+    - name: Test handshake crypto
+      if: ${{ matrix.config.preset == 'server' }}
+      run: ${{github.workspace}}/build/common/test-handshake-crypto
 
     - name: Publish build dependencies
       if: ${{ matrix.config.preset == 'server' }}

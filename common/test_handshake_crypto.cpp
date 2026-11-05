@@ -21,13 +21,18 @@
 #include "identity.h"
 #include "secrets.h"
 #include "smp.h"
+#include "wivrn_sockets.h"
 
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <netinet/in.h>
+#include <poll.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <thread>
 #include <unistd.h>
 
 #define CHECK(x)                                                                            \
@@ -107,6 +112,88 @@ void test_identity_key(const std::filesystem::path & dir)
 		threw = true;
 	}
 	CHECK(threw);
+}
+
+void test_identity_key_race(const std::filesystem::path & dir)
+{
+	// Concurrent first use: every caller gets the key that ends up on disk
+	for (int round = 0; round < 50; round++)
+	{
+		auto path = dir / ("race" + std::to_string(round)) / "server_key.pem";
+		std::vector<uint8_t> a, b;
+		std::thread t1{[&] { a = wivrn::load_or_create_identity_key(path).raw_public_key(); }};
+		std::thread t2{[&] { b = wivrn::load_or_create_identity_key(path).raw_public_key(); }};
+		t1.join();
+		t2.join();
+		auto stored = wivrn::load_or_create_identity_key(path).raw_public_key();
+		CHECK(a == stored);
+		CHECK(b == stored);
+	}
+
+	// A stale world-readable temporary file does not leak its mode to the key
+	auto path = dir / "stale" / "server_key.pem";
+	std::filesystem::create_directories(path.parent_path());
+	auto stale = path;
+	stale += ".new";
+	std::ofstream{stale} << "stale";
+	::chmod(stale.c_str(), 0644);
+	wivrn::load_or_create_identity_key(path);
+	struct stat st
+	{};
+	CHECK(::stat(path.c_str(), &st) == 0);
+	CHECK((st.st_mode & 0777) == 0600);
+}
+
+// Connected loopback TCP socket pair: {accepted, connecting}
+std::pair<int, int> tcp_pair()
+{
+	int listener = ::socket(AF_INET, SOCK_STREAM, 0);
+	sockaddr_in addr{};
+	addr.sin_family = AF_INET;
+	addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	socklen_t len = sizeof(addr);
+	CHECK(::bind(listener, (sockaddr *)&addr, sizeof(addr)) == 0);
+	CHECK(::listen(listener, 1) == 0);
+	CHECK(::getsockname(listener, (sockaddr *)&addr, &len) == 0);
+
+	int client = ::socket(AF_INET, SOCK_STREAM, 0);
+	CHECK(::connect(client, (sockaddr *)&addr, sizeof(addr)) == 0);
+	int server = ::accept(listener, nullptr, nullptr);
+	CHECK(server >= 0);
+	::close(listener);
+	return {server, client};
+}
+
+void test_no_plaintext_before_key_change()
+{
+	// Bytes received before the keys are set must not be accepted afterwards as if decrypted
+	auto [receiver_fd, sender_fd] = tcp_pair();
+	wivrn::TCP receiver{receiver_fd};
+
+	const uint8_t partial[] = {8, 0, 0, 0, 1, 2}; // header of an 8-byte packet and part of it
+	CHECK(::write(sender_fd, partial, sizeof(partial)) == (ssize_t)sizeof(partial));
+	pollfd pfd{.fd = receiver_fd, .events = POLLIN};
+	CHECK(::poll(&pfd, 1, 1000) == 1);
+	CHECK(receiver.receive_raw().empty()); // incomplete packet stays buffered
+
+	std::array<uint8_t, 16> key{}, iv{};
+	bool threw = false;
+	try
+	{
+		receiver.set_aes_key_and_ivs(key, iv, iv);
+	}
+	catch (std::exception &)
+	{
+		threw = true;
+	}
+	CHECK(threw);
+
+	// With nothing pending, setting the keys works
+	auto [idle_fd, idle_peer] = tcp_pair();
+	wivrn::TCP idle{idle_fd};
+	idle.set_aes_key_and_ivs(key, iv, iv);
+	::close(sender_fd);
+	::close(idle_peer);
 }
 
 void test_trusted_keys(const std::filesystem::path & dir)
@@ -197,6 +284,8 @@ int main()
 	std::filesystem::path dir = tmpl;
 
 	test_identity_key(dir);
+	test_identity_key_race(dir);
+	test_no_plaintext_before_key_change();
 	test_trusted_keys(dir);
 	test_session_keys();
 	test_pin_check_binding();

@@ -213,7 +213,8 @@ key key::from_private_key(std::string_view pem)
 {
 	bio mem{pem};
 
-	key pkey{PEM_read_bio_PrivateKey(mem, nullptr, nullptr, nullptr)};
+	// Empty passphrase: an encrypted key fails instead of prompting on the terminal
+	key pkey{PEM_read_bio_PrivateKey(mem, nullptr, nullptr, (void *)"")};
 
 	if (!pkey.pkey)
 		throw_openssl_error();
