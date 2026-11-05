@@ -18,6 +18,8 @@
 
 #include "crypto.h"
 
+#include <algorithm>
+#include <array>
 #include <openssl/core_names.h>
 #include <openssl/ec.h>
 #include <openssl/err.h>
@@ -405,6 +407,27 @@ void cipher_context::set_key_and_iv(std::span<uint8_t> key, std::span<uint8_t> i
 		throw_openssl_error();
 }
 
+void cipher_context::set_iv_length(size_t length)
+{
+	if (not ctx)
+		throw std::invalid_argument("Uninitalized context");
+
+	if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_SET_IVLEN, length, nullptr) <= 0)
+		throw_openssl_error();
+
+	iv_length_ = EVP_CIPHER_CTX_get_iv_length(ctx);
+}
+
+void cipher_context::add_aad(std::span<const uint8_t> aad)
+{
+	if (not ctx)
+		throw std::invalid_argument("Uninitalized context");
+
+	int size_out = 0;
+	if (not EVP_CipherUpdate(ctx, nullptr, &size_out, aad.data(), aad.size()))
+		throw_openssl_error();
+}
+
 encrypt_context::encrypt_context(const EVP_CIPHER * cipher)
 {
 	ctx = EVP_CIPHER_CTX_new();
@@ -463,6 +486,18 @@ void encrypt_context::encrypt_in_place(std::span<std::span<uint8_t>> text)
 	}
 }
 
+void encrypt_context::finalize(std::span<uint8_t, tag_length> tag)
+{
+	// GCM writes nothing here, the buffer only satisfies the API
+	std::array<uint8_t, 16> unused;
+	int size_out = 0;
+	if (not EVP_EncryptFinal_ex(ctx, unused.data(), &size_out))
+		throw_openssl_error();
+
+	if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_GET_TAG, tag.size(), tag.data()) <= 0)
+		throw_openssl_error();
+}
+
 decrypt_context::decrypt_context(const EVP_CIPHER * cipher)
 {
 	ctx = EVP_CIPHER_CTX_new();
@@ -518,6 +553,25 @@ void decrypt_context::decrypt_in_place(std::span<std::span<uint8_t>> text)
 		if (not EVP_DecryptUpdate(ctx, i.data(), &size_out, i.data(), i.size()))
 			throw_openssl_error();
 	}
+}
+
+bool decrypt_context::finalize(std::span<const uint8_t, tag_length> tag)
+{
+	// OpenSSL takes a non-const pointer but only reads the expected tag
+	std::array<uint8_t, tag_length> expected;
+	std::ranges::copy(tag, expected.begin());
+	if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_SET_TAG, expected.size(), expected.data()) <= 0)
+		throw_openssl_error();
+
+	std::array<uint8_t, 16> unused;
+	int size_out = 0;
+	// Fails if the tag does not match: clear the error queue instead of throwing
+	if (EVP_DecryptFinal_ex(ctx, unused.data(), &size_out) <= 0)
+	{
+		ERR_clear_error();
+		return false;
+	}
+	return true;
 }
 
 std::array<uint8_t, 32> sha256(std::span<const uint8_t> data)

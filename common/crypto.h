@@ -131,6 +131,13 @@ public:
 	void set_iv(std::span<uint8_t> iv);
 	void set_key_and_iv(std::span<uint8_t> key, std::span<uint8_t> iv);
 
+	// AEAD ciphers only (e.g. AES-GCM): change the IV length, must be called before setting the IV
+	void set_iv_length(size_t length);
+	// AEAD ciphers only: authenticate additional data, after setting the IV and before any (en|de)crypt call
+	void add_aad(std::span<const uint8_t> aad);
+
+	static constexpr size_t tag_length = 16;
+
 	size_t key_length() const
 	{
 		return key_length_;
@@ -167,6 +174,9 @@ public:
 	std::vector<uint8_t> encrypt(std::span<uint8_t> plaintext);
 	void encrypt_in_place(std::span<uint8_t> plaintext);
 	void encrypt_in_place(std::span<std::span<uint8_t>> plaintext);
+
+	// AEAD ciphers only: finish the message and write its authentication tag
+	void finalize(std::span<uint8_t, tag_length> tag);
 };
 
 class decrypt_context : public cipher_context
@@ -184,6 +194,10 @@ public:
 	std::vector<uint8_t> decrypt(std::span<uint8_t> ciphertext);
 	void decrypt_in_place(std::span<uint8_t> ciphertext);
 	void decrypt_in_place(std::span<std::span<uint8_t>> ciphertext);
+
+	// AEAD ciphers only: finish the message and check its authentication tag.
+	// Returns false if the message was tampered with: the decrypted data must then be discarded.
+	[[nodiscard]] bool finalize(std::span<const uint8_t, tag_length> tag);
 };
 
 // Salt must be at least 8 characters

@@ -1,0 +1,19 @@
+name: Socket tests
+on: [push, pull_request]
+jobs:
+  sockets-ut:
+    name: Authenticated socket records
+    runs-on: ubuntu-24.04
+    if: ${{ vars.APK_ONLY == '' }}
+    steps:
+    - uses: actions/checkout@v6
+    - name: Install dependencies
+      run: sudo apt-get update && sudo apt-get install -y g++ libssl-dev libboost-dev libmagicenum-dev
+    # Built standalone: the CMake target needs the full client/server dependency set
+    - name: Build wivrn_sockets_ut (ASan/UBSan)
+      run: >
+        g++ -std=c++23 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -Icommon
+        common/wivrn_sockets_ut.cpp common/wivrn_sockets.cpp common/crypto.cpp common/smp.cpp
+        -lssl -lcrypto -o wivrn_sockets_ut
+    - name: Run wivrn_sockets_ut
+      run: ./wivrn_sockets_ut

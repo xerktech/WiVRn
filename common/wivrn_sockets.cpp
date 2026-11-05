@@ -35,7 +35,35 @@
 #include <system_error>
 #include <unistd.h>
 
-thread_local crypto::encrypt_context wivrn::UDP::encrypter{EVP_aes_128_ctr()};
+namespace
+{
+constexpr size_t tag_length = crypto::cipher_context::tag_length;
+
+crypto::encrypt_context make_gcm_encrypter()
+{
+	crypto::encrypt_context ctx{EVP_aes_128_gcm()};
+	// The existing key schedule hands out 16-byte IVs
+	ctx.set_iv_length(16);
+	return ctx;
+}
+
+crypto::decrypt_context make_gcm_decrypter()
+{
+	crypto::decrypt_context ctx{EVP_aes_128_gcm()};
+	ctx.set_iv_length(16);
+	return ctx;
+}
+
+std::array<uint8_t, 16> record_iv(const std::array<uint8_t, 16> & base, uint64_t sequence)
+{
+	auto iv = base;
+	for (size_t i = 0; i < sizeof(sequence); ++i)
+		iv[iv.size() - 1 - i] ^= uint8_t(sequence >> (8 * i));
+	return iv;
+}
+} // namespace
+
+thread_local crypto::encrypt_context wivrn::UDP::encrypter = make_gcm_encrypter();
 std::atomic<uint64_t> wivrn::UDP::iv_counter;
 
 const char * wivrn::invalid_packet::what() const noexcept
@@ -230,6 +258,64 @@ wivrn::TCPListener::TCPListener(int port)
 	}
 }
 
+bool wivrn::UDP::is_replayed(uint64_t counter) const
+{
+	if (not replay_started or counter > replay_highest)
+		return false;
+
+	if (replay_highest - counter >= replay_window)
+		return true; // Too old to tell: drop it
+
+	return replay_seen[counter % replay_window];
+}
+
+void wivrn::UDP::mark_received(uint64_t counter)
+{
+	if (not replay_started)
+	{
+		replay_started = true;
+		replay_highest = counter;
+	}
+	else if (counter > replay_highest)
+	{
+		if (counter - replay_highest >= replay_window)
+			replay_seen.reset();
+		else
+			for (uint64_t i = replay_highest + 1; i < counter; ++i)
+				replay_seen[i % replay_window] = false;
+		replay_highest = counter;
+	}
+	replay_seen[counter % replay_window] = true;
+}
+
+bool wivrn::UDP::open_packet(std::span<uint8_t> & message)
+{
+	// Not big enough for the IV and tag: drop the packet
+	if (message.size() < sizeof(uint64_t) + tag_length)
+		return false;
+
+	uint64_t counter;
+	memcpy(&counter, message.data(), sizeof(counter)); // TODO: endianness?
+	if (is_replayed(counter))
+		return false;
+
+	std::array<uint8_t, 16> full_iv;
+	memcpy(full_iv.data(), &counter, sizeof(uint64_t));
+	memcpy(full_iv.data() + sizeof(uint64_t), recv_iv_header.data(), recv_iv_header.size());
+
+	auto tag = message.last<tag_length>();
+	auto payload = message.subspan(sizeof(uint64_t), message.size() - sizeof(uint64_t) - tag_length);
+
+	decrypter.set_iv(full_iv);
+	decrypter.decrypt_in_place(payload);
+	if (not decrypter.finalize(tag))
+		return false;
+
+	mark_received(counter);
+	message = payload;
+	return true;
+}
+
 std::pair<wivrn::deserialization_packet, sockaddr_in6> wivrn::UDP::receive_from_raw()
 {
 	sockaddr_in6 addr;
@@ -246,21 +332,8 @@ std::pair<wivrn::deserialization_packet, sockaddr_in6> wivrn::UDP::receive_from_
 
 	std::span message{buffer.get(), (size_t)received};
 
-	if (encrypted)
-	{
-		// Not big enough for the IV: drop the packet
-		if (received < sizeof(uint64_t))
-			return {};
-
-		std::array<uint8_t, 16> full_iv;
-		memcpy(full_iv.data(), buffer.get(), sizeof(uint64_t)); // TODO: endianness?
-		memcpy(full_iv.data() + sizeof(uint64_t), recv_iv_header.data(), recv_iv_header.size());
-
-		message = message.subspan(sizeof(uint64_t));
-
-		decrypter.set_iv(full_iv);
-		decrypter.decrypt_in_place(message);
-	}
+	if (encrypted and not open_packet(message))
+		return {};
 
 	return {deserialization_packet{std::move(buffer), message}, addr};
 }
@@ -321,29 +394,15 @@ wivrn::deserialization_packet wivrn::UDP::receive_raw()
 		std::span<uint8_t> message{(uint8_t *)iovecs[i].iov_base, mmsgs[i].msg_len};
 		assert(message.data() != nullptr);
 
-		if (encrypted)
-		{
-			// Not big enough for the IV: drop the packet
-			if (message.size() < sizeof(uint64_t))
-				throw std::runtime_error("Packet too small: " + std::to_string(message.size()));
-
-			std::array<uint8_t, 16> full_iv;
-			memcpy(full_iv.data(), message.data(), sizeof(uint64_t)); // TODO: endianness?
-			memcpy(full_iv.data() + sizeof(uint64_t), recv_iv_header.data(), recv_iv_header.size());
-
-			message = message.subspan(sizeof(uint64_t));
-
-			decrypter.set_iv(full_iv);
-			decrypter.decrypt_in_place(message);
-		}
-
-		if (i == 0)
-			return deserialization_packet{buffer, message};
+		// Drop truncated, forged or replayed packets
+		if (encrypted and not open_packet(message))
+			continue;
 
 		messages.push_back(message);
 	}
 
-	__builtin_unreachable();
+	// The first received message is at the back
+	return receive_pending();
 }
 
 size_t wivrn::UDP::send_raw(serialization_packet && packet)
@@ -354,6 +413,7 @@ size_t wivrn::UDP::send_raw(serialization_packet && packet)
 	std::vector<std::span<uint8_t>> & data = packet;
 
 	uint64_t counter;
+	std::array<uint8_t, tag_length> tag;
 	if (encrypted)
 	{
 		counter = iv_counter.fetch_add(1);
@@ -366,10 +426,14 @@ size_t wivrn::UDP::send_raw(serialization_packet && packet)
 
 		encrypter.set_key_and_iv(key, full_iv);
 		encrypter.encrypt_in_place(data);
+		encrypter.finalize(tag);
 	}
 
 	for (const auto & span: data)
 		iovecs.emplace_back(span.data(), span.size());
+
+	if (encrypted)
+		iovecs.emplace_back(tag.data(), tag.size());
 
 	if (ssize_t sent = ::writev(fd, iovecs.data(), iovecs.size()); sent >= 0)
 		return sent;
@@ -381,6 +445,7 @@ size_t wivrn::UDP::send_many_raw(std::span<serialization_packet> packets)
 	thread_local std::vector<iovec> iovecs;
 	thread_local std::vector<mmsghdr> mmsgs;
 	thread_local std::vector<uint64_t> iv_counters;
+	thread_local std::vector<std::array<uint8_t, tag_length>> tags;
 
 	if (packets.empty())
 		return 0;
@@ -388,8 +453,11 @@ size_t wivrn::UDP::send_many_raw(std::span<serialization_packet> packets)
 	iovecs.clear();
 	mmsgs.clear();
 	iv_counters.clear();
+	tags.clear();
 
+	// iovecs point into these: they must not reallocate
 	iv_counters.reserve(packets.size());
+	tags.reserve(packets.size());
 
 	size_t sent = 0;
 	for (serialization_packet & packet: packets)
@@ -408,6 +476,7 @@ size_t wivrn::UDP::send_many_raw(std::span<serialization_packet> packets)
 
 			encrypter.set_key_and_iv(key, full_iv);
 			encrypter.encrypt_in_place(data);
+			encrypter.finalize(tags.emplace_back());
 		}
 
 		for (const auto & span: data)
@@ -417,7 +486,10 @@ size_t wivrn::UDP::send_many_raw(std::span<serialization_packet> packets)
 		}
 
 		if (encrypted)
-			mmsgs.push_back({.msg_hdr = {.msg_iovlen = data.size() + 1}});
+		{
+			iovecs.emplace_back(tags.back().data(), tags.back().size());
+			mmsgs.push_back({.msg_hdr = {.msg_iovlen = data.size() + 2}});
+		}
 		else
 			mmsgs.push_back({.msg_hdr = {.msg_iovlen = data.size()}});
 	}
@@ -434,10 +506,54 @@ size_t wivrn::UDP::send_many_raw(std::span<serialization_packet> packets)
 	return sent;
 }
 
+// TCP records: uint32 payload length (in clear), payload, then a GCM tag when encrypted.
+// The length is authenticated as additional data.
+static constexpr size_t tcp_max_payload = 16 * 1024 * 1024;
+
+wivrn::deserialization_packet wivrn::TCP::next_record()
+{
+	if (data.size_bytes() < sizeof(uint32_t))
+		return {};
+
+	uint32_t payload_size;
+	memcpy(&payload_size, data.data(), sizeof(payload_size)); // Records are not aligned
+	if (payload_size == 0)
+		throw std::runtime_error("Invalid packet: 0 size");
+	if (payload_size > tcp_max_payload)
+		throw std::runtime_error("Invalid packet: size " + std::to_string(payload_size));
+
+	const size_t overhead = decrypter ? tag_length : 0;
+	if (data.size_bytes() < sizeof(uint32_t) + payload_size + overhead)
+		return {};
+
+	auto span = data.subspan(sizeof(uint32_t), payload_size);
+
+	if (decrypter)
+	{
+		auto iv = record_iv(recv_iv, recv_sequence++);
+		decrypter.set_iv(iv);
+		decrypter.add_aad(data.first(sizeof(uint32_t)));
+		decrypter.decrypt_in_place(span);
+		// The stream cannot be resynchronised after a forged record
+		if (not decrypter.finalize(data.subspan(sizeof(uint32_t) + payload_size).first<tag_length>()))
+			throw std::runtime_error("Invalid packet: authentication failed");
+	}
+
+	data = data.subspan(sizeof(uint32_t) + payload_size + overhead);
+	return deserialization_packet{buffer, span};
+}
+
+void wivrn::TCP::seal(std::span<uint8_t> header, std::span<std::span<uint8_t>> payload, std::span<uint8_t, tag_length> tag)
+{
+	auto iv = record_iv(send_iv, send_sequence++);
+	encrypter.set_iv(iv);
+	encrypter.add_aad(header);
+	encrypter.encrypt_in_place(payload);
+	encrypter.finalize(tag);
+}
+
 wivrn::deserialization_packet wivrn::TCP::receive_raw()
 {
-	static constexpr size_t max_payload = 16 * 1024 * 1024;
-
 	ssize_t expected_size;
 
 	if (data.size_bytes() < sizeof(uint32_t))
@@ -446,10 +562,11 @@ wivrn::deserialization_packet wivrn::TCP::receive_raw()
 	}
 	else
 	{
-		uint32_t payload_size = *reinterpret_cast<uint32_t *>(data.data());
-		if (payload_size > max_payload)
+		uint32_t payload_size;
+		memcpy(&payload_size, data.data(), sizeof(payload_size)); // Records are not aligned
+		if (payload_size > tcp_max_payload)
 			throw std::runtime_error("Invalid packet: size " + std::to_string(payload_size));
-		expected_size = payload_size + sizeof(uint32_t) - data.size_bytes();
+		expected_size = payload_size + sizeof(uint32_t) + (decrypter ? tag_length : 0) - data.size_bytes();
 	}
 
 	if (expected_size > capacity_left)
@@ -458,7 +575,8 @@ wivrn::deserialization_packet wivrn::TCP::receive_raw()
 		                                   4096);
 		auto old = std::move(buffer);
 		buffer = std::make_shared_for_overwrite<uint8_t[]>(new_size);
-		memcpy(buffer.get(), data.data(), data.size_bytes());
+		if (not data.empty())
+			memcpy(buffer.get(), data.data(), data.size_bytes());
 		data = std::span(buffer.get(), data.size());
 		capacity_left = new_size - data.size_bytes();
 	}
@@ -473,87 +591,29 @@ wivrn::deserialization_packet wivrn::TCP::receive_raw()
 		if (received_size == 0)
 			throw socket_shutdown{};
 
-		if (decrypter)
-		{
-			std::span<uint8_t> received_data{&*data.end(), (size_t)received_size};
-			decrypter.decrypt_in_place(received_data);
-		}
-
 		data = std::span(data.data(), data.size() + received_size);
 		capacity_left -= received_size;
 	}
 
-	if (data.size_bytes() < sizeof(uint32_t))
-		return {};
-
-	uint32_t payload_size = *reinterpret_cast<uint32_t *>(data.data());
-	if (payload_size == 0)
-		throw std::runtime_error("Invalid packet: 0 size");
-
-	if (data.size_bytes() < sizeof(uint32_t) + payload_size)
-		return {};
-
-	auto span = data.subspan(sizeof(uint32_t), payload_size);
-	data = data.subspan(sizeof(uint32_t) + payload_size);
-	return deserialization_packet{buffer, span};
+	return next_record();
 }
 
 wivrn::deserialization_packet wivrn::TCP::receive_pending()
 {
-	if (data.size_bytes() < sizeof(uint32_t))
-		return {};
-
-	uint32_t payload_size = *reinterpret_cast<uint32_t *>(data.data());
-	if (payload_size == 0)
-		throw std::runtime_error("Invalid packet: 0 size");
-
-	if (data.size_bytes() < sizeof(uint32_t) + payload_size)
-		return {};
-
-	auto span = data.subspan(sizeof(uint32_t), payload_size);
-	data = data.subspan(sizeof(uint32_t) + payload_size);
-	return deserialization_packet{buffer, span};
+	return next_record();
 }
 
-size_t wivrn::TCP::send_raw(serialization_packet && packet)
+namespace
+{
+size_t send_all(int fd, msghdr hdr)
 {
 	size_t total_sent = 0;
-	thread_local std::vector<iovec> iovecs;
-	iovecs.clear();
-
-	std::vector<std::span<uint8_t>> & data = packet;
-
-	uint32_t size = 0;
-	iovecs.emplace_back(&size, sizeof(size));
-	for (const auto & span: data)
-	{
-		size += span.size_bytes();
-		iovecs.emplace_back(span.data(), span.size_bytes());
-	}
-
-	msghdr hdr{
-	        .msg_name = nullptr,
-	        .msg_namelen = 0,
-	        .msg_iov = iovecs.data(),
-	        .msg_iovlen = iovecs.size(),
-	        .msg_control = nullptr,
-	        .msg_controllen = 0,
-	        .msg_flags = 0,
-	};
-
-	std::lock_guard lock(*mutex);
-	if (encrypter)
-	{
-		data.insert(data.begin(), {(uint8_t *)&size, sizeof(size)});
-		encrypter.encrypt_in_place(data);
-	}
-
 	while (true)
 	{
 		ssize_t sent = ::sendmsg(fd, &hdr, MSG_NOSIGNAL);
 
 		if (sent == 0)
-			throw socket_shutdown{};
+			throw wivrn::socket_shutdown{};
 
 		if (sent < 0)
 			throw std::system_error{errno, std::generic_category()};
@@ -561,7 +621,7 @@ size_t wivrn::TCP::send_raw(serialization_packet && packet)
 		total_sent += sent;
 
 		// iov fully consumed
-		while (hdr.msg_iovlen > 0 and sent >= hdr.msg_iov[0].iov_len)
+		while (hdr.msg_iovlen > 0 and size_t(sent) >= hdr.msg_iov[0].iov_len)
 		{
 			sent -= hdr.msg_iov[0].iov_len;
 			++hdr.msg_iov;
@@ -573,21 +633,60 @@ size_t wivrn::TCP::send_raw(serialization_packet && packet)
 		hdr.msg_iov[0].iov_len -= sent;
 	}
 }
+} // namespace
+
+size_t wivrn::TCP::send_raw(serialization_packet && packet)
+{
+	thread_local std::vector<iovec> iovecs;
+	iovecs.clear();
+
+	std::vector<std::span<uint8_t>> & data = packet;
+
+	uint32_t size = 0;
+	std::array<uint8_t, tag_length> tag;
+	iovecs.emplace_back(&size, sizeof(size));
+	for (const auto & span: data)
+	{
+		size += span.size_bytes();
+		iovecs.emplace_back(span.data(), span.size_bytes());
+	}
+	if (encrypter)
+		iovecs.emplace_back(tag.data(), tag.size());
+
+	msghdr hdr{
+	        .msg_name = nullptr,
+	        .msg_namelen = 0,
+	        .msg_iov = iovecs.data(),
+	        .msg_iovlen = iovecs.size(),
+	        .msg_control = nullptr,
+	        .msg_controllen = 0,
+	        .msg_flags = 0,
+	};
+
+	// Sequence numbers must be assigned in the order records hit the wire
+	std::lock_guard lock(*mutex);
+	if (encrypter)
+		seal({(uint8_t *)&size, sizeof(size)}, data, tag);
+
+	return send_all(fd, hdr);
+}
 
 size_t wivrn::TCP::send_many_raw(std::span<serialization_packet> packets)
 {
 	thread_local std::vector<iovec> iovecs;
 	thread_local std::vector<uint32_t> sizes;
-	thread_local std::vector<std::span<uint8_t>> spans;
+	thread_local std::vector<std::array<uint8_t, tag_length>> tags;
 
 	if (packets.empty())
 		return 0;
 
 	iovecs.clear();
 	sizes.clear();
-	spans.clear();
+	tags.clear();
 
+	// iovecs point into these: they must not reallocate
 	sizes.reserve(packets.size());
+	tags.reserve(packets.size());
 
 	for (serialization_packet & packet: packets)
 	{
@@ -595,13 +694,17 @@ size_t wivrn::TCP::send_many_raw(std::span<serialization_packet> packets)
 
 		auto & size = sizes.emplace_back(0);
 		iovecs.emplace_back(&size, sizeof(size));
-		spans.emplace_back((uint8_t *)&size, sizeof(size));
 
 		for (const auto & span: data)
 		{
 			size += span.size_bytes();
 			iovecs.emplace_back(span.data(), span.size_bytes());
-			spans.emplace_back(span.data(), span.size_bytes());
+		}
+
+		if (encrypter)
+		{
+			auto & tag = tags.emplace_back();
+			iovecs.emplace_back(tag.data(), tag.size());
 		}
 	}
 
@@ -615,51 +718,34 @@ size_t wivrn::TCP::send_many_raw(std::span<serialization_packet> packets)
 	        .msg_flags = 0,
 	};
 
+	// Sequence numbers must be assigned in the order records hit the wire
 	std::lock_guard lock(*mutex);
 	if (encrypter)
 	{
-		encrypter.encrypt_in_place(spans);
-	}
-
-	size_t total_sent = 0;
-	while (true)
-	{
-		ssize_t sent = ::sendmsg(fd, &hdr, MSG_NOSIGNAL);
-
-		if (sent == 0)
-			throw socket_shutdown{};
-
-		if (sent < 0)
-			throw std::system_error{errno, std::generic_category()};
-
-		total_sent += sent;
-
-		// iov fully consumed
-		while (hdr.msg_iovlen > 0 and sent >= hdr.msg_iov[0].iov_len)
+		for (size_t i = 0; i < packets.size(); ++i)
 		{
-			sent -= hdr.msg_iov[0].iov_len;
-			++hdr.msg_iov;
-			--hdr.msg_iovlen;
+			std::vector<std::span<uint8_t>> & data = packets[i];
+			seal({(uint8_t *)&sizes[i], sizeof(uint32_t)}, data, tags[i]);
 		}
-		if (hdr.msg_iovlen == 0)
-			return total_sent;
-		hdr.msg_iov[0].iov_base = (void *)((uintptr_t)hdr.msg_iov[0].iov_base + sent);
-		hdr.msg_iov[0].iov_len -= sent;
 	}
+
+	return send_all(fd, hdr);
 }
 
 void wivrn::UDP::set_aes_key_and_ivs(std::span<std::uint8_t, 16> key_, std::span<std::uint8_t, 8> recv_iv_header_, std::span<std::uint8_t, 8> send_iv_header_)
 {
-	decrypter = crypto::decrypt_context{EVP_aes_128_ctr()};
+	decrypter = make_gcm_decrypter();
 	decrypter.set_key(key_);
 
 	std::ranges::copy(key_, key.begin());
 	std::ranges::copy(recv_iv_header_, recv_iv_header.begin());
 	std::ranges::copy(send_iv_header_, send_iv_header.begin());
+	replay_seen.reset();
+	replay_started = false;
 	encrypted = true;
 }
 
-void wivrn::TCP::set_aes_key_and_ivs(std::span<std::uint8_t, 16> key, std::span<std::uint8_t, 16> recv_iv, std::span<std::uint8_t, 16> send_iv)
+void wivrn::TCP::set_aes_key_and_ivs(std::span<std::uint8_t, 16> key, std::span<std::uint8_t, 16> recv_iv_, std::span<std::uint8_t, 16> send_iv_)
 {
 	// Bytes already received were not decrypted: accepting them after the key change would let a
 	// peer without the key pre-send "encrypted" packets in plaintext. The handshake never has
@@ -667,11 +753,14 @@ void wivrn::TCP::set_aes_key_and_ivs(std::span<std::uint8_t, 16> key, std::span<
 	if (not data.empty())
 		throw std::runtime_error("Unexpected data received before encryption was set up");
 
-	encrypter = crypto::encrypt_context{EVP_aes_128_ctr()};
+	encrypter = make_gcm_encrypter();
 	encrypter.set_key(key);
-	encrypter.set_iv(send_iv);
 
-	decrypter = crypto::decrypt_context{EVP_aes_128_ctr()};
+	decrypter = make_gcm_decrypter();
 	decrypter.set_key(key);
-	decrypter.set_iv(recv_iv);
+
+	std::ranges::copy(recv_iv_, recv_iv.begin());
+	std::ranges::copy(send_iv_, send_iv.begin());
+	recv_sequence = 0;
+	send_sequence = 0;
 }
