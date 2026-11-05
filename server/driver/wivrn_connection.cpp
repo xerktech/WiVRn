@@ -204,12 +204,15 @@ void wivrn::wivrn_connection::init(std::stop_token stop_token, std::function<voi
 		case encryption_state::pairing:
 			// Generate an ephemeral key pair just for exchanging the AES key
 			crypto::key server_key = crypto::key::generate_x448_keypair();
+			// Long-term key the headset pins at pairing, so it can tell this server from an impostor
+			crypto::key identity_key = wivrn::server_identity_key();
 
 			control.send(to_headset::crypto_handshake{
 			        .public_key = server_key.public_key(),
 			        .state = is_public_key_known
 			                         ? to_headset::crypto_handshake::crypto_state::client_already_paired
 			                         : to_headset::crypto_handshake::crypto_state::pin_needed,
+			        .identity_key = identity_key.public_key(),
 			});
 
 			if (not is_public_key_known)
@@ -221,7 +224,7 @@ void wivrn::wivrn_connection::init(std::stop_token stop_token, std::function<voi
 
 					auto msg1 = std::get<from_headset::pin_check_1>(receive(2min).first).message;
 
-					auto msg2 = pin_check.step2(msg1, pin);
+					auto msg2 = pin_check.step2(msg1, pin_check_secret(pin, identity_key, headset_key));
 					control.send(to_headset::pin_check_2{msg2});
 
 					auto msg3 = std::get<from_headset::pin_check_3>(receive(10s).first).message;
@@ -238,14 +241,15 @@ void wivrn::wivrn_connection::init(std::stop_token stop_token, std::function<voi
 				}
 			}
 
-			secrets s{server_key, headset_key, is_public_key_known ? "000000" : pin};
+			auto s = secrets::server(server_key, identity_key, headset_key, is_public_key_known ? "000000" : pin);
 			control.set_aes_key_and_ivs(s.control_key, s.control_iv_from_headset, s.control_iv_to_headset);
 			stream.set_aes_key_and_ivs(s.stream_key, s.stream_iv_header_from_headset, s.stream_iv_header_to_headset);
 			break;
 	}
 
 	// Wait for confirmation that the client has set up encryption
-	if (not std::holds_alternative<from_headset::crypto_handshake>(receive().first))
+	// Bounded wait: a client that stops here would otherwise hold the server's only handshake slot
+	if (not std::holds_alternative<from_headset::crypto_handshake>(receive(10s).first))
 		throw std::runtime_error("No handshake received from client");
 
 	control.send(to_headset::handshake{.stream_port = port});

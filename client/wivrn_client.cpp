@@ -19,6 +19,7 @@
 
 #include "wivrn_client.h"
 #include "application.h"
+#include "identity.h"
 #include "protocol_version.h"
 #include "secrets.h"
 #include "smp.h"
@@ -70,6 +71,12 @@ auto & port(sockaddr_in6 & sa)
 }
 } // namespace
 
+// Identity keys of the servers this headset paired with
+static std::filesystem::path trusted_servers_path()
+{
+	return application::get_config_path() / "trusted_servers";
+}
+
 template <typename T>
 void wivrn_session::handshake(T address, bool tcp_only, crypto::key & headset_keypair, std::function<std::string(int fd)> pin_enter)
 {
@@ -114,13 +121,39 @@ void wivrn_session::handshake(T address, bool tcp_only, crypto::key & headset_ke
 	        .name = application::get_hmd_traits().model_name(),
 	});
 
-	to_headset::crypto_handshake crypto_handshake = std::get<to_headset::crypto_handshake>(receive(10s));
+	to_headset::crypto_handshake crypto_handshake;
+	try
+	{
+		crypto_handshake = std::get<to_headset::crypto_handshake>(receive(10s));
+	}
+	catch (wivrn::deserialization_error & e)
+	{
+		// A server from before the identity key cannot be parsed
+		spdlog::error("Cannot parse server handshake: {}", e.what());
+		throw std::runtime_error(_("Incompatible server version"));
+	}
+
+	// Long-term key of the server, only sent when encryption is enabled
+	crypto::key server_identity;
+	if (crypto_handshake.state == to_headset::crypto_handshake::crypto_state::pin_needed or
+	    crypto_handshake.state == to_headset::crypto_handshake::crypto_state::client_already_paired)
+	{
+		server_identity = crypto::key::from_public_key(crypto_handshake.identity_key);
+		if (EVP_PKEY_get_base_id(server_identity) != EVP_PKEY_X448)
+			throw std::runtime_error(_("Invalid server identity key"));
+	}
 
 	std::string pin = "000000";
 	switch (crypto_handshake.state)
 	{
 		case to_headset::crypto_handshake::crypto_state::encryption_disabled: {
-			spdlog::info("Encryption is disabled on server");
+			// Anyone who can reach the headset could otherwise downgrade it to plaintext
+			if (not application::get_config().allow_unencrypted_server)
+			{
+				spdlog::warn("Server has encryption disabled, refusing to connect");
+				throw std::runtime_error(_("The server has encryption disabled, refusing to connect"));
+			}
+			spdlog::warn("Encryption is disabled on server, connecting without encryption");
 
 			send_control(from_headset::crypto_handshake{});
 
@@ -145,7 +178,7 @@ void wivrn_session::handshake(T address, bool tcp_only, crypto::key & headset_ke
 			{
 				crypto::smp pin_check;
 
-				auto msg1 = pin_check.step1(pin);
+				auto msg1 = pin_check.step1(pin_check_secret(pin, server_identity, headset_keypair));
 				send_control(from_headset::pin_check_1{msg1});
 
 				auto msg2 = std::get<to_headset::pin_check_2>(receive(10s)).message;
@@ -167,16 +200,28 @@ void wivrn_session::handshake(T address, bool tcp_only, crypto::key & headset_ke
 			[[fallthrough]];
 
 		case to_headset::crypto_handshake::crypto_state::client_already_paired: {
-			spdlog::info("Using pin \"{}\"", pin);
+			const bool pairing = crypto_handshake.state == to_headset::crypto_handshake::crypto_state::pin_needed;
+
+			// Without the PIN, only a server whose identity was pinned at pairing is accepted
+			if (not pairing and not wivrn::is_trusted_key(trusted_servers_path(), server_identity))
+			{
+				spdlog::warn("Server identity key is not trusted, refusing to connect");
+				throw std::runtime_error(_("Unknown server identity. If this is your server, remove this headset from its paired devices and pair again."));
+			}
 
 			crypto::key server_key = crypto::key::from_public_key(crypto_handshake.public_key);
-			secrets s{headset_keypair, server_key, pin};
+			auto s = secrets::headset(headset_keypair, server_key, server_identity, pin);
 			control.set_aes_key_and_ivs(s.control_key, s.control_iv_to_headset, s.control_iv_from_headset);
 
 			// Confirm that encryption is set up
 			send_control(from_headset::crypto_handshake{});
 
 			to_headset::handshake h{std::get<to_headset::handshake>(receive(10s))};
+
+			// The PIN check passed against this identity key and the server derived the session keys
+			if (pairing)
+				wivrn::add_trusted_key(trusted_servers_path(), server_identity);
+
 			if (h.stream_port > 0 && !tcp_only)
 			{
 				stream = decltype(stream)();
@@ -196,6 +241,11 @@ void wivrn_session::handshake(T address, bool tcp_only, crypto::key & headset_ke
 		case to_headset::crypto_handshake::crypto_state::incompatible_version:
 			spdlog::error("Incompatible protocol versions");
 			throw std::runtime_error(_("Incompatible server version"));
+
+		default:
+			// The state is not range-checked on deserialization: never fall through to a plaintext session
+			spdlog::error("Invalid crypto state {}", (int)crypto_handshake.state);
+			throw std::runtime_error(_("Invalid server handshake"));
 	}
 
 	// may be on control socket if forced TCP
@@ -203,12 +253,17 @@ void wivrn_session::handshake(T address, bool tcp_only, crypto::key & headset_ke
 
 	// Wait for second handshake
 	auto timeout = std::chrono::steady_clock::now() + 10s;
+	bool handshake_received = false;
 	while (true)
 	{
-		if (poll([](const auto && packet) { return std::is_same_v<std::remove_cvref_t<decltype(packet)>, to_headset::handshake>; }, 100ms))
-		{
+		poll([&](const auto && packet) {
+			if constexpr (std::is_same_v<std::remove_cvref_t<decltype(packet)>, to_headset::handshake>)
+				handshake_received = true;
+		},
+		     100ms);
+
+		if (handshake_received)
 			return;
-		}
 
 		if (std::chrono::steady_clock::now() >= timeout)
 			throw std::runtime_error(_("Timeout"));

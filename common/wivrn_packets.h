@@ -768,8 +768,9 @@ struct crypto_handshake
 		incompatible_version,
 	};
 
-	std::string public_key; // In PEM format
+	std::string public_key; // Ephemeral key, in PEM format
 	crypto_state state;
+	std::string identity_key; // Server long-term key, pinned by the headset at pairing, in PEM format
 };
 
 struct pin_check_2

@@ -18,6 +18,8 @@
 
 #pragma once
 
+#include <array>
+#include <cstdint>
 #include <openssl/evp.h>
 #include <span>
 #include <string_view>
@@ -62,6 +64,9 @@ public:
 
 	std::string public_key() const;
 	std::string private_key() const;
+
+	// Raw public key bytes, works with x25519, x448 keys
+	std::vector<uint8_t> raw_public_key() const;
 
 	operator EVP_PKEY *()
 	{
@@ -196,6 +201,9 @@ public:
 };
 
 // Salt must be at least 8 characters
-std::vector<uint8_t> pbkdf2(std::string pass, std::string salt, std::span<uint8_t> secret, size_t size);
+std::array<uint8_t, 32> sha256(std::span<const uint8_t> data);
+
+// HKDF-SHA256 (RFC 5869): derives size bytes from the input key material
+std::vector<uint8_t> hkdf_sha256(std::span<const uint8_t> key, std::string salt, std::string info, size_t size);
 
 } // namespace crypto

@@ -652,6 +652,13 @@ void scenes::lobby::gui_debug()
 
 	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(20, 20));
 
+	{
+		auto & config = application::get_config();
+		if (ImGui::Checkbox("Allow servers with encryption disabled (insecure)", &config.allow_unencrypted_server))
+			config.save();
+		imgui_ctx->vibrate_on_hover();
+	}
+
 	if (ImGui::CollapsingHeader("Tune controller offset"))
 	{
 		imgui_ctx->vibrate_on_hover();

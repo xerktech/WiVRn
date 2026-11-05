@@ -338,6 +338,7 @@ const std::vector<config_field> & configuration::config_fields()
 	        scalar("override_foveation_pitch", &configuration::override_foveation_pitch),
 	        scalar("override_foveation_distance", &configuration::override_foveation_distance),
 	        scalar("first_run", &configuration::first_run),
+	        scalar("allow_unencrypted_server", &configuration::allow_unencrypted_server),
 	        scalar("locale", &configuration::locale),
 	        scalar("environment_model", &configuration::environment_model),
 	        scalar("high_power_mode", &configuration::high_power_mode),
