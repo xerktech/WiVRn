@@ -115,30 +115,40 @@ std::string read_file(const std::filesystem::path & path)
 }
 } // namespace
 
+namespace
+{
+crypto::key load_identity_key(const std::filesystem::path & path)
+{
+	crypto::key key;
+	try
+	{
+		key = crypto::key::from_private_key(read_file(path));
+	}
+	catch (std::exception & e)
+	{
+		throw std::runtime_error("Cannot read identity key " + path.string() + ": " + e.what());
+	}
+	if (EVP_PKEY_get_base_id(key) != EVP_PKEY_X448)
+		throw std::runtime_error(path.string() + " is not an X448 private key");
+	return key;
+}
+} // namespace
+
 crypto::key wivrn::load_or_create_identity_key(const std::filesystem::path & path)
 {
 	if (std::filesystem::exists(path))
-	{
-		crypto::key key;
-		try
-		{
-			key = crypto::key::from_private_key(read_file(path));
-		}
-		catch (std::exception & e)
-		{
-			throw std::runtime_error("Cannot read identity key " + path.string() + ": " + e.what());
-		}
-		if (EVP_PKEY_get_base_id(key) != EVP_PKEY_X448)
-			throw std::runtime_error(path.string() + " is not an X448 private key");
-		return key;
-	}
+		return load_identity_key(path);
 
 	crypto::key key = crypto::key::generate_x448_keypair();
 	if (create_private_file(path, key.private_key()))
 		return key;
 
-	// Lost a race with another connection: use the key it stored
-	return load_or_create_identity_key(path);
+	// Lost a race with another connection: use the key it stored. If the path still does not
+	// resolve to a file, it is something like a dangling symlink, never replace it.
+	if (not std::filesystem::exists(path))
+		throw std::runtime_error("Cannot create identity key " + path.string() + ": the path exists but is not a readable file");
+
+	return load_identity_key(path);
 }
 
 bool wivrn::is_trusted_key(const std::filesystem::path & path, const crypto::key & key)

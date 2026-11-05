@@ -130,6 +130,24 @@ void test_identity_key_race(const std::filesystem::path & dir)
 		CHECK(b == stored);
 	}
 
+	// A dangling symlink is an error naming the file, not an endless retry nor a replaced link
+	{
+		auto link_path = dir / "dangling" / "server_key.pem";
+		std::filesystem::create_directories(link_path.parent_path());
+		std::filesystem::create_symlink(dir / "dangling" / "missing" / "key.pem", link_path);
+		bool threw = false;
+		try
+		{
+			wivrn::load_or_create_identity_key(link_path);
+		}
+		catch (std::exception &)
+		{
+			threw = true;
+		}
+		CHECK(threw);
+		CHECK(std::filesystem::is_symlink(link_path));
+	}
+
 	// A stale world-readable temporary file does not leak its mode to the key
 	auto path = dir / "stale" / "server_key.pem";
 	std::filesystem::create_directories(path.parent_path());

@@ -248,7 +248,8 @@ void wivrn::wivrn_connection::init(std::stop_token stop_token, std::function<voi
 	}
 
 	// Wait for confirmation that the client has set up encryption
-	if (not std::holds_alternative<from_headset::crypto_handshake>(receive().first))
+	// Bounded wait: a client that stops here would otherwise hold the server's only handshake slot
+	if (not std::holds_alternative<from_headset::crypto_handshake>(receive(10s).first))
 		throw std::runtime_error("No handshake received from client");
 
 	control.send(to_headset::handshake{.stream_port = port});
