@@ -128,6 +128,9 @@ public:
 	// Allow unsafe config values
 	bool extended_config = false;
 
+	// Debug only: connect to a server that has encryption disabled (plaintext, no server authentication)
+	bool allow_unencrypted_server = false;
+
 	bool first_run = true;
 
 	std::string locale;

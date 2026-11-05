@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include "crypto.h"
 #include "hostname.h"
 #include "wivrn_config.h"
 #include <array>
@@ -83,6 +84,10 @@ struct headset_key
 	std::string name;
 	std::optional<std::chrono::system_clock::time_point> last_connection;
 };
+
+// Long-term X448 key that identifies this server to paired headsets, created on first use.
+// Headsets pin it at pairing: if it is lost or replaced, every headset must pair again.
+crypto::key server_identity_key();
 
 std::vector<headset_key> known_keys();
 void add_known_key(headset_key key);

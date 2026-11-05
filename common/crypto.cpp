@@ -235,6 +235,20 @@ std::string key::private_key() const
 	return mem;
 }
 
+std::vector<uint8_t> key::raw_public_key() const
+{
+	size_t size = 0;
+	if (EVP_PKEY_get_raw_public_key(pkey, nullptr, &size) != 1)
+		throw_openssl_error();
+
+	std::vector<uint8_t> raw(size);
+	if (EVP_PKEY_get_raw_public_key(pkey, raw.data(), &size) != 1)
+		throw_openssl_error();
+
+	raw.resize(size);
+	return raw;
+}
+
 key key::generate_rsa_keypair(int bits)
 {
 	auto ctx = details::key_context::from_id(EVP_PKEY_RSA);
@@ -505,16 +519,29 @@ void decrypt_context::decrypt_in_place(std::span<std::span<uint8_t>> text)
 	}
 }
 
-std::vector<uint8_t> pbkdf2(std::string pass, std::string salt, std::span<uint8_t> secret, size_t size)
+std::array<uint8_t, 32> sha256(std::span<const uint8_t> data)
 {
+	std::array<uint8_t, 32> digest;
+	unsigned int size = digest.size();
+	if (EVP_Digest(data.data(), data.size(), digest.data(), &size, EVP_sha256(), nullptr) != 1)
+		throw_openssl_error();
+
+	return digest;
+}
+
+std::vector<uint8_t> hkdf_sha256(std::span<const uint8_t> key, std::string salt, std::string info, size_t size)
+{
+	std::string digest = "SHA256";
+	std::vector<uint8_t> ikm{key.begin(), key.end()};
 	std::array params{
+	        OSSL_PARAM_construct_utf8_string(OSSL_KDF_PARAM_DIGEST, digest.data(), 0),
+	        OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_KEY, ikm.data(), ikm.size()),
 	        OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_SALT, salt.data(), salt.size()),
-	        OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_PASSWORD, pass.data(), pass.size()),
-	        OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_SECRET, secret.data(), secret.size()),
+	        OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_INFO, info.data(), info.size()),
 	        OSSL_PARAM_construct_end(),
 	};
 
-	details::kdf_context kdf{"PBKDF2"};
+	details::kdf_context kdf{"HKDF"};
 
 	std::vector<uint8_t> result;
 	result.resize(size);

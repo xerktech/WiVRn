@@ -20,6 +20,7 @@
 #define JSON_DISABLE_ENUM_SERIALIZATION 1
 
 #include "configuration.h"
+#include "identity.h"
 
 #include <algorithm>
 #include <chrono>
@@ -50,6 +51,7 @@ static auto resolve_path(std::filesystem::path path)
 
 static std::filesystem::path config_file;
 static std::filesystem::path known_keys_file = resolve_path(xdg_config_home() / "wivrn" / "known_keys.json");
+static std::filesystem::path identity_key_file = resolve_path(xdg_config_home() / "wivrn" / "server_key.pem");
 static std::filesystem::path cookie_file = resolve_path(xdg_config_home() / "wivrn" / "cookie");
 
 namespace wivrn
@@ -304,6 +306,11 @@ std::optional<std::chrono::system_clock::time_point> from_iso8601(const std::str
 		return std::nullopt;
 
 	return std::chrono::system_clock::from_time_t(mktime(&t));
+}
+
+crypto::key server_identity_key()
+{
+	return load_or_create_identity_key(identity_key_file);
 }
 
 std::vector<headset_key> known_keys()

@@ -23,6 +23,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 struct secrets
 {
@@ -34,5 +35,19 @@ struct secrets
 	std::array<std::uint8_t, 8> stream_iv_header_to_headset;
 	std::array<std::uint8_t, 8> stream_iv_header_from_headset;
 
-	secrets(crypto::key & my_key, crypto::key & peer_key, const std::string & pin);
+	// Session keys for an authenticated handshake.
+	// The headset authenticates with its static key (pinned by the server in known_keys), the
+	// server with its long-term identity key (pinned by the headset at pairing). Keys are derived
+	// from DH(headset, server ephemeral) || DH(headset, server identity), so only a peer holding
+	// the pinned private key can compute them.
+	static secrets headset(crypto::key & headset_key, crypto::key & server_ephemeral, crypto::key & server_identity, const std::string & pin);
+	static secrets server(crypto::key & server_ephemeral, crypto::key & server_identity, crypto::key & headset_key, const std::string & pin);
+
+private:
+	secrets(std::vector<uint8_t> dh, const std::string & pin);
 };
+
+// Secret compared by the PIN check (SMP). It binds the PIN to both long-term public keys, so a
+// relay sitting between the headset and the real server sees a mismatch instead of a successful
+// PIN check it could brute-force offline.
+std::string pin_check_secret(const std::string & pin, const crypto::key & server_identity, const crypto::key & headset_key);

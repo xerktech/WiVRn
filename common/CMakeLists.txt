@@ -19,6 +19,7 @@ add_library(wivrn-common STATIC EXCLUDE_FROM_ALL
     crypto.cpp
     smp.cpp
     secrets.cpp
+    identity.cpp
     wivrn_sockets.cpp
     utils/strings.cpp
     vk/allocation.cpp
@@ -51,6 +52,9 @@ if (WIVRN_BUILD_DASHBOARD OR WIVRN_BUILD_SERVER)
         add_executable(vdf utils/vdf.cpp)
         target_compile_definitions(vdf PRIVATE WIVRN_BUILD_TEST)
         target_link_libraries(vdf Boost::iostreams)
+
+        add_executable(test-handshake-crypto test_handshake_crypto.cpp)
+        target_link_libraries(test-handshake-crypto wivrn-common)
     endif()
 endif()
 
