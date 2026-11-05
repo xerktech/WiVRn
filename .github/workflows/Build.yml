@@ -105,7 +105,7 @@ jobs:
 
     - name: Test handshake crypto
       if: ${{ matrix.config.preset == 'server' }}
-      run: ${{github.workspace}}/build/common/test-handshake-crypto
+      run: timeout 120 ${{github.workspace}}/build/common/test-handshake-crypto
 
     - name: Publish build dependencies
       if: ${{ matrix.config.preset == 'server' }}
