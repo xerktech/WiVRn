@@ -17,7 +17,8 @@ APK, built from the same commit as the server.
 
 - Every push to `master` runs `.github/workflows/APK-Release.yml` and publishes
   `apk-<sha>` for that commit.
-- For any other commit: Actions → "Release APK Only" → Run workflow, `ref` = the commit sha.
+- For any other commit: Actions → "Release APK Only" → Run workflow, `ref` = the full
+  40-character commit sha (a short sha is looked up as a branch name and fails).
   Or `gh workflow run APK-Release.yml -R xerktech/WiVRn -f ref=<sha>`.
 - The workflow refuses to run without the `APK_SIGNINGKEYPASSWORD` and `APK_KEYSTORE_BASE64`
   repository secrets: an unsigned APK cannot be installed.
@@ -64,5 +65,8 @@ Notes:
   (`org.meumeu.wivrn`) rather than replacing it. Uninstall the store client to avoid
   launching the wrong one.
 - `adb install -r` keeps app data, so the pinned server key survives an upgrade.
+- The version code is the commit count, so `adb install -r` refuses an older commit's APK
+  (`INSTALL_FAILED_VERSION_DOWNGRADE`). Rolling the server pin back means
+  `adb uninstall org.meumeu.wivrn.xerktech`, installing the older APK, and re-pairing.
 - Wireless adb (after the first USB connection): `adb tcpip 5555`, then
   `adb connect <headset-ip>:5555`.
