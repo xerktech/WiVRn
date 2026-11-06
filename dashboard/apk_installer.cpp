@@ -68,11 +68,12 @@ QCoro::Task<> apk_installer::doRefreshLatestVersion()
 		qDebug() << "Getting release metadata";
 	}
 
-	QUrl metadata_url;
-	if (isTagged())
-		metadata_url = QString{"https://api.github.com/repos/WiVRn/WiVRn/releases/tags/"} + wivrn::git_commit;
-	else
-		metadata_url = QString{"https://api.github.com/repos/WiVRn/WiVRn-APK/releases/tags/apk-"} + wivrn::git_commit;
+	// xerktech fork: its headset protocol is incompatible with upstream, so
+	// only the APK built from this exact commit will work. The fork's
+	// APK-Release workflow publishes it as wivrn-xerktech-<sha>.apk under the
+	// apk-<sha> release of xerktech/WiVRn, tagged build or not.
+	const QUrl metadata_url = QString{"https://api.github.com/repos/xerktech/WiVRn/releases/tags/apk-"} + wivrn::git_commit;
+	const std::string apk_name = std::string{"wivrn-xerktech-"} + wivrn::git_commit + ".apk";
 
 	reply.reset(co_await manager.get(QNetworkRequest{metadata_url}));
 
@@ -87,7 +88,7 @@ QCoro::Task<> apk_installer::doRefreshLatestVersion()
 		{
 			std::string name = i["name"];
 
-			if (name.ends_with("-release.apk"))
+			if (name == apk_name)
 			{
 				m_apkUrl = QString::fromStdString(i["browser_download_url"]);
 				break;

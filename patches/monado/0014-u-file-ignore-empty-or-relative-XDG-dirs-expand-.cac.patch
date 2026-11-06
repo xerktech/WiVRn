@@ -1,0 +1,88 @@
+From de6470c25f415d231dd7fb1cc5cce03a9ac0f0b5 Mon Sep 17 00:00:00 2001
+From: Malcolm Habeeb <malcolm@tesoroxp.com>
+Date: Fri, 6 Nov 2026 18:27:20 -0500
+Subject: [PATCH] u/file: ignore empty or relative XDG dirs, expand ~/.cache
+ from HOME
+
+An empty XDG_RUNTIME_DIR gave an empty runtime dir, so
+u_file_get_path_in_runtime_dir returned 0 and wivrn-server failed with
+"cannot create directories: Invalid argument []". With
+XDG_RUNTIME_DIR and XDG_CACHE_HOME unset, the fallback was the literal
+relative path "~/.cache", creating a directory named "~" in the
+working directory.
+
+Follow the XDG base directory spec: treat unset, empty or relative
+values as unset, and build the fallback from $HOME. Return an error
+when HOME is unusable rather than inventing a relative path.
+---
+ src/xrt/auxiliary/util/u_file.c | 37 +++++++++++++++++++++++++++++++--
+ 1 file changed, 35 insertions(+), 2 deletions(-)
+
+diff --git a/src/xrt/auxiliary/util/u_file.c b/src/xrt/auxiliary/util/u_file.c
+index 618988738..2ed2c124f 100644
+--- a/src/xrt/auxiliary/util/u_file.c
++++ b/src/xrt/auxiliary/util/u_file.c
+@@ -231,9 +231,26 @@ u_file_get_hand_tracking_models_dir(char *out_path, size_t out_path_size)
+ 
+ #endif /* XRT_OS_LINUX */
+ 
++#ifndef XRT_OS_WINDOWS
++/*!
++ * Per the XDG base directory spec, a variable that is unset, empty or holds a
++ * relative path is ignored.
++ */
++static const char *
++get_absolute_env(const char *name)
++{
++	const char *value = getenv(name);
++	if (value == NULL || value[0] != '/') {
++		return NULL;
++	}
++	return value;
++}
++#endif
++
+ int
+ u_file_get_runtime_dir(char *out_path, size_t out_path_size)
+ {
++#ifdef XRT_OS_WINDOWS
+ 	const char *xdg_rt = getenv("XDG_RUNTIME_DIR");
+ 	if (xdg_rt != NULL) {
+ 		return snprintf(out_path, out_path_size, "%s", xdg_rt);
+@@ -243,6 +260,17 @@ u_file_get_runtime_dir(char *out_path, size_t out_path_size)
+ 	if (xdg_cache != NULL) {
+ 		return snprintf(out_path, out_path_size, "%s", xdg_cache);
+ 	}
++#else
++	const char *xdg_rt = get_absolute_env("XDG_RUNTIME_DIR");
++	if (xdg_rt != NULL) {
++		return snprintf(out_path, out_path_size, "%s", xdg_rt);
++	}
++
++	const char *xdg_cache = get_absolute_env("XDG_CACHE_HOME");
++	if (xdg_cache != NULL) {
++		return snprintf(out_path, out_path_size, "%s", xdg_cache);
++	}
++#endif
+ 
+ #ifdef XRT_OS_WINDOWS
+ #ifndef UNICODE // If Unicode support is disabled, use ANSI functions directly into out_path
+@@ -253,8 +281,13 @@ u_file_get_runtime_dir(char *out_path, size_t out_path_size)
+ 	return wcstombs(out_path, temp, out_path_size);
+ #endif // UNICODE
+ #else
+-	const char *cache = "~/.cache";
+-	return snprintf(out_path, out_path_size, "%s", cache);
++	// The shell does not expand "~" here: a literal "~/.cache" would be a
++	// relative path, so resolve it from $HOME and fail if there is none.
++	const char *home = get_absolute_env("HOME");
++	if (home == NULL) {
++		return -1;
++	}
++	return snprintf(out_path, out_path_size, "%s/.cache", home);
+ #endif
+ }
+ 
+-- 
+2.43.0
+
