@@ -766,6 +766,7 @@ struct crypto_handshake
 		client_already_paired,
 		pairing_disabled,
 		incompatible_version,
+		server_key_error, // The server's identity key file cannot be loaded, see the server log
 	};
 
 	std::string public_key; // Ephemeral key, in PEM format

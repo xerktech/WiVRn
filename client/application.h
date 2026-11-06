@@ -396,6 +396,12 @@ public:
 		return instance().config_path;
 	}
 
+	// Identity keys of the servers this headset paired with
+	static std::filesystem::path get_trusted_servers_path()
+	{
+		return instance().config_path / "trusted_servers";
+	}
+
 	static const std::filesystem::path & get_cache_path()
 	{
 		return instance().cache_path;
