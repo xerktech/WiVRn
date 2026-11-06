@@ -71,7 +71,8 @@ QCoro::Task<> apk_installer::doRefreshLatestVersion()
 	// xerktech fork: its headset protocol is incompatible with upstream, so
 	// only the APK built from this exact commit will work. The fork's
 	// APK-Release workflow publishes it as wivrn-xerktech-<sha>.apk under the
-	// apk-<sha> release of xerktech/WiVRn, tagged build or not.
+	// apk-<sha> release of xerktech/WiVRn. GitVersion.cmake ignores those apk-*
+	// tags so git_commit stays the bare sha.
 	const QUrl metadata_url = QString{"https://api.github.com/repos/xerktech/WiVRn/releases/tags/apk-"} + wivrn::git_commit;
 	const std::string apk_name = std::string{"wivrn-xerktech-"} + wivrn::git_commit + ".apk";
 

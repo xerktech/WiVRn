@@ -135,7 +135,7 @@ if __name__ == "__main__":
     try:
         git_tag = (
             subprocess.check_output(
-                ["git", "describe", "--exact-match", "--tags"], cwd=root, stderr=subprocess.DEVNULL
+                ["git", "describe", "--exact-match", "--tags", "--exclude", "apk-*"], cwd=root, stderr=subprocess.DEVNULL
             )
             .decode()
             .strip()
@@ -145,7 +145,7 @@ if __name__ == "__main__":
     except subprocess.CalledProcessError:
         git_tag = ""
         git_desc = (
-            subprocess.check_output(["git", "describe", "--tags", "--always"], cwd=root)
+            subprocess.check_output(["git", "describe", "--tags", "--always", "--exclude", "apk-*"], cwd=root)
             .decode()
             .strip()
         )

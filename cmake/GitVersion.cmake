@@ -4,7 +4,10 @@ endif()
 
 if (NOT (GIT_TAG OR GIT_DESC OR GIT_COMMIT))
 	execute_process(
-		COMMAND ${GIT_EXECUTABLE} describe --exact-match --tags
+		# apk-<sha> tags mark the xerktech fork's APK releases (APK-Release.yml),
+		# not versions: matching one would make git_commit "apk-<sha>" (breaking
+		# the dashboard's APK lookup) or the version "apk-<sha>".
+		COMMAND ${GIT_EXECUTABLE} describe --exact-match --tags --exclude apk-*
 		OUTPUT_VARIABLE GIT_TAG
 		OUTPUT_STRIP_TRAILING_WHITESPACE
 		ERROR_QUIET
@@ -20,7 +23,7 @@ if (GIT_TAG)
 else()
 	if (NOT GIT_DESC)
 		execute_process(
-			COMMAND ${GIT_EXECUTABLE} describe --tags --always
+			COMMAND ${GIT_EXECUTABLE} describe --tags --always --exclude apk-*
 			OUTPUT_VARIABLE GIT_DESC
 			OUTPUT_STRIP_TRAILING_WHITESPACE
 		)
