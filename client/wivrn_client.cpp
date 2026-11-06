@@ -71,12 +71,6 @@ auto & port(sockaddr_in6 & sa)
 }
 } // namespace
 
-// Identity keys of the servers this headset paired with
-static std::filesystem::path trusted_servers_path()
-{
-	return application::get_config_path() / "trusted_servers";
-}
-
 template <typename T>
 void wivrn_session::handshake(T address, bool tcp_only, crypto::key & headset_keypair, std::function<std::string(int fd)> pin_enter)
 {
@@ -203,7 +197,7 @@ void wivrn_session::handshake(T address, bool tcp_only, crypto::key & headset_ke
 			const bool pairing = crypto_handshake.state == to_headset::crypto_handshake::crypto_state::pin_needed;
 
 			// Without the PIN, only a server whose identity was pinned at pairing is accepted
-			if (not pairing and not wivrn::is_trusted_key(trusted_servers_path(), server_identity))
+			if (not pairing and not wivrn::is_trusted_key(application::get_trusted_servers_path(), server_identity))
 			{
 				spdlog::warn("Server identity key is not trusted, refusing to connect");
 				throw std::runtime_error(_("Unknown server identity. If this is your server, remove this headset from its paired devices and pair again."));
@@ -220,7 +214,7 @@ void wivrn_session::handshake(T address, bool tcp_only, crypto::key & headset_ke
 
 			// The PIN check passed against this identity key and the server derived the session keys
 			if (pairing)
-				wivrn::add_trusted_key(trusted_servers_path(), server_identity);
+				wivrn::add_trusted_key(application::get_trusted_servers_path(), server_identity);
 
 			if (h.stream_port > 0 && !tcp_only)
 			{
@@ -241,6 +235,10 @@ void wivrn_session::handshake(T address, bool tcp_only, crypto::key & headset_ke
 		case to_headset::crypto_handshake::crypto_state::incompatible_version:
 			spdlog::error("Incompatible protocol versions");
 			throw std::runtime_error(_("Incompatible server version"));
+
+		case to_headset::crypto_handshake::crypto_state::server_key_error:
+			spdlog::error("Server cannot load its identity key");
+			throw std::runtime_error(_("The server cannot load its identity key (server_key.pem). Check the server log."));
 
 		default:
 			// The state is not range-checked on deserialization: never fall through to a plaintext session

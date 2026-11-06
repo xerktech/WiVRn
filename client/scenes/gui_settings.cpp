@@ -42,10 +42,12 @@
 #include <array>
 #include <boost/locale.hpp>
 #include <cmath>
+#include <filesystem>
 #include <functional>
 #include <locale>
 #include <optional>
 #include <spdlog/fmt/fmt.h>
+#include <spdlog/spdlog.h>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -434,18 +436,6 @@ void settings_streaming(const settings_context & ctx)
 
 	ui::page_header(_cS("page header title", "Streaming"), _cS("page header subtitle", "How video is encoded and sent to the headset."));
 	render_settings(ctx, "##streaming", list);
-
-	if (wivrn::ui::confirm_modal(
-	            "confirm disable in stream gui",
-	            _C("confirmation messagebox title", "Disable in-stream window"),
-	            _C("confirmation message", "Do you really want to disable the in-stream window?\nYou will not be able to re-open it with the thumbsticks."),
-	            _("Yes"),
-	            _("No"),
-	            true) == 1)
-	{
-		config.enable_stream_gui = false;
-		config.save();
-	}
 }
 
 void settings_post_processing(const settings_context & ctx)
@@ -842,11 +832,53 @@ void settings_system(const settings_context & ctx)
 	        .default_bool = default_config.enable_stream_gui,
 	});
 
+	bool forget_servers = false;
+	list.push_back({
+	        .id = "##forget_servers",
+	        .label = _C("setting name", "Paired servers"),
+	        .description = _("Forget the identity of every server this headset paired with. You will need to enter a PIN to pair again."),
+	        .ui = ui_kind::button,
+	        .button_label = _C("button label to forget paired servers", "Forget"),
+	        .on_click = [&forget_servers] { forget_servers = true; },
+	        .enabled = [] { return std::filesystem::exists(application::get_trusted_servers_path()); },
+	        .disabled_tooltip = _("No server is paired."),
+	});
+
 	ui::page_header(_cS("page header title", "System"), _cS("page header suibtitle", "Language and advanced options."));
 	render_settings(ctx, "##system", list);
 
 	if (disable_instream_gui)
 		ImGui::OpenPopup("confirm disable in stream gui");
+
+	if (forget_servers)
+		ImGui::OpenPopup("confirm forget servers");
+
+	// Drawn on the page that opens them, at the same id stack level as OpenPopup
+	if (wivrn::ui::confirm_modal(
+	            "confirm disable in stream gui",
+	            _C("confirmation messagebox title", "Disable in-stream window"),
+	            _C("confirmation message", "Do you really want to disable the in-stream window?\nYou will not be able to re-open it with the thumbsticks."),
+	            _("Yes"),
+	            _("No"),
+	            true) == 1)
+	{
+		config.enable_stream_gui = false;
+		config.save();
+	}
+
+	if (wivrn::ui::confirm_modal(
+	            "confirm forget servers",
+	            _C("confirmation messagebox title", "Forget paired servers"),
+	            _C("confirmation message", "Forget every paired server?\nTo connect again, remove this headset from the server's paired devices and pair it with a PIN."),
+	            _("Forget"),
+	            _("Cancel"),
+	            true) == 1)
+	{
+		std::error_code ec;
+		std::filesystem::remove(application::get_trusted_servers_path(), ec);
+		if (ec)
+			spdlog::warn("Cannot remove {}: {}", application::get_trusted_servers_path().string(), ec.message());
+	}
 }
 
 void settings_theme(const settings_context & ctx)
