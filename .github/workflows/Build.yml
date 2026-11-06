@@ -336,7 +336,7 @@ jobs:
 
     - name: Build
       run: |
-        VERSION=$(git describe --tags --always | sed "s/^v\([0-9]\)/\1/")
+        VERSION=$(git describe --tags --always --exclude "apk-*" | sed "s/^v\([0-9]\)/\1/")
         if [ ${{ matrix.buildtype }} = 'Oculus' ]
         then
           SUFFIX=""

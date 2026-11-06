@@ -56,7 +56,9 @@ def main():
 
     if args.nightly:
         version = (
-            subprocess.check_output(["git", "describe", "--tags", "--always"]).decode().strip()
+            subprocess.check_output(["git", "describe", "--tags", "--always", "--exclude", "apk-*"])
+            .decode()
+            .strip()
         )
         if version[0] == "v":
             version = version[1:]  # remove the initial "v"
