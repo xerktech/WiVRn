@@ -15,10 +15,10 @@ on:
 permissions:
   contents: read
 
-# One release run at a time, so a push and a dispatch of the same commit
-# cannot race to create the same release.
+# Per commit: a push and a dispatch of the same commit cannot race on one
+# release, while runs for different commits are never cancelled.
 concurrency:
-  group: apk-release
+  group: apk-release-${{ inputs.ref || github.sha }}
   cancel-in-progress: false
 
 jobs:
