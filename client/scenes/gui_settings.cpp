@@ -836,11 +836,11 @@ void settings_system(const settings_context & ctx)
 	list.push_back({
 	        .id = "##forget_servers",
 	        .label = _C("setting name", "Paired servers"),
-	        .description = _("Forget the identity of every server this headset paired with. You will need to enter a PIN to pair again."),
+	        .description = _("Forget the identity of every server this headset paired with. To connect again, remove this headset from the server's paired devices and pair it with a PIN."),
 	        .ui = ui_kind::button,
 	        .button_label = _C("button label to forget paired servers", "Forget"),
 	        .on_click = [&forget_servers] { forget_servers = true; },
-	        .enabled = [] { return std::filesystem::exists(application::get_trusted_servers_path()); },
+	        .enabled = [] { std::error_code ec; return std::filesystem::exists(application::get_trusted_servers_path(), ec); },
 	        .disabled_tooltip = _("No server is paired."),
 	});
 
