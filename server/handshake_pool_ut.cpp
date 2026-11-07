@@ -322,11 +322,56 @@ static void test_pin_throttle_wait()
 	}
 }
 
+// The headset gives up on pin_check_4 after 10s (client/wivrn_client.cpp); a shorter budget
+// refuses a headset that just mistyped its PIN while another check runs
+static_assert(pin_throttle::max_peer_wait < std::chrono::seconds(10));
+static_assert(pin_throttle::max_peer_wait >= std::chrono::seconds(5));
+
+// begin() reports its wait through the callback, so the handshake pool can evict it
+static void test_pin_throttle_waiting()
+{
+	pin_throttle t;
+	std::stop_source stop;
+	std::vector<bool> calls;
+	auto waiting = [&](bool w) { calls.push_back(w); };
+
+	// Free: still reported, and cleared
+	CHECK(t.begin(stop.get_token(), pin_throttle::max_peer_wait, waiting));
+	CHECK((calls == std::vector<bool>{true, false}));
+
+	// Busy and the wait times out: cleared too
+	calls.clear();
+	CHECK(not t.begin(stop.get_token(), 50ms, waiting));
+	CHECK((calls == std::vector<bool>{true, false}));
+
+	// Waiting while another check runs: reported as waiting until the other check ends
+	calls.clear();
+	std::atomic<bool> ended = false;
+	bool waiting_while_busy = false;
+	std::jthread ender([&] {
+		std::this_thread::sleep_for(100ms);
+		ended = true;
+		t.end(true);
+	});
+	CHECK(t.begin(stop.get_token(), pin_throttle::max_peer_wait, [&](bool w) {
+		calls.push_back(w);
+		if (w)
+			waiting_while_busy = not ended;
+		else
+			CHECK(ended);
+	}));
+	CHECK(waiting_while_busy);
+	CHECK((calls == std::vector<bool>{true, false}));
+	ender.join();
+	t.end(true);
+}
+
 int main()
 {
 	test_handshake_pool();
 	test_pin_throttle();
 	test_pin_throttle_wait();
+	test_pin_throttle_waiting();
 
 	if (failures)
 	{

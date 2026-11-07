@@ -93,18 +93,11 @@ class pin_attempt
 	bool correct = false;
 
 public:
-	// The headset waits 10s for pin_check_4 (client/wivrn_client.cpp): wait for the running
-	// check or the delay after a wrong PIN for less than that rather than refusing, so a user who
-	// mistyped once just retries. The wait counts as waiting for the peer, so the handshake pool
-	// can still cancel it to make room.
+	// Waits for the running check or the delay after a wrong PIN rather than refusing, so a user
+	// who mistyped once just retries
 	pin_attempt(std::stop_token stop, const std::function<void(bool)> & waiting)
 	{
-		if (waiting)
-			waiting(true);
-		bool ok = pin_attempts.begin(stop, std::chrono::seconds(8));
-		if (waiting)
-			waiting(false);
-		if (not ok)
+		if (not pin_attempts.begin(stop, wivrn::pin_throttle::max_peer_wait, waiting))
 			throw std::runtime_error("PIN check refused: another check is running or a wrong PIN was entered recently");
 	}
 	pin_attempt(const pin_attempt &) = delete;
