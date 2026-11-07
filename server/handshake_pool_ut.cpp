@@ -262,10 +262,71 @@ static void test_pin_throttle()
 	CHECK(t.end(false, now) == 20ms);
 }
 
+// begin() waits for the running check or the wrong-PIN delay instead of refusing
+static void test_pin_throttle_wait()
+{
+	using namespace std::chrono;
+	{
+		pin_throttle t;
+		std::stop_source stop;
+		CHECK(t.begin(stop.get_token(), 0s));
+
+		// Busy: times out
+		auto start = steady_clock::now();
+		CHECK(not t.begin(stop.get_token(), 100ms));
+		CHECK(steady_clock::now() - start >= 100ms);
+
+		// Busy, then ended correctly from another thread: the waiter gets it without waiting the
+		// full max_wait
+		std::jthread ender([&] {
+			std::this_thread::sleep_for(100ms);
+			t.end(true);
+		});
+		start = steady_clock::now();
+		CHECK(t.begin(stop.get_token(), 5s));
+		CHECK(steady_clock::now() - start < 2s);
+		ender.join();
+
+		// Ended wrong: the waiter also sits out the 20ms delay
+		std::jthread wrong([&] {
+			std::this_thread::sleep_for(50ms);
+			t.end(false);
+		});
+		start = steady_clock::now();
+		CHECK(t.begin(stop.get_token(), 5s));
+		CHECK(steady_clock::now() - start >= 70ms);
+		CHECK(steady_clock::now() - start < 2s);
+		wrong.join();
+
+		// Busy, stop requested: returns early
+		std::jthread stopper([&] {
+			std::this_thread::sleep_for(100ms);
+			stop.request_stop();
+		});
+		start = steady_clock::now();
+		CHECK(not t.begin(stop.get_token(), 5s));
+		CHECK(steady_clock::now() - start < 2s);
+		stopper.join();
+		t.end(true);
+	}
+	{
+		// The wrong-PIN delay longer than max_wait: refused
+		pin_throttle t;
+		std::stop_source stop;
+		for (int i = 0; i < 6; ++i) // 20ms, 40ms ... 640ms
+		{
+			CHECK(t.begin(stop.get_token(), 5s));
+			t.end(false);
+		}
+		CHECK(not t.begin(stop.get_token(), 100ms));
+	}
+}
+
 int main()
 {
 	test_handshake_pool();
 	test_pin_throttle();
+	test_pin_throttle_wait();
 
 	if (failures)
 	{

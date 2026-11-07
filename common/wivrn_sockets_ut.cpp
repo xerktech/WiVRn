@@ -163,6 +163,38 @@ static void test_tcp()
 		t.join();
 	}
 
+	// A lowered payload limit rejects a larger record from its length prefix, before buffering it;
+	// restoring the limit accepts it again
+	{
+		auto [x, y] = tcp_pair();
+		TCP a(x), b(y);
+		b.set_max_payload(64 * 1024);
+		auto p5 = payload(64 * 1024, 5), p6 = payload(64 * 1024 + 1, 6);
+		a.send_raw(make(p5));
+		CHECK(bytes_of(recv_one(b)) == payload(64 * 1024, 5));
+		a.send_raw(make(p6));
+		bool threw = false;
+		try
+		{
+			recv_one(b);
+		}
+		catch (std::runtime_error & e)
+		{
+			threw = std::string(e.what()).starts_with("Invalid packet: size");
+		}
+		CHECK(threw);
+	}
+	{
+		auto [x, y] = tcp_pair();
+		TCP a(x), b(y);
+		b.set_max_payload(64 * 1024);
+		b.set_max_payload(TCP::default_max_payload);
+		auto p7 = payload(1024 * 1024, 7);
+		std::thread t([&] { a.send_raw(make(p7)); });
+		CHECK(bytes_of(recv_one(b)) == payload(1024 * 1024, 7));
+		t.join();
+	}
+
 	auto forward_and_receive = [](tcp_mitm & m, auto && tamper) -> std::string {
 		auto wire = drain(m.a_raw);
 		tamper(wire);

@@ -610,7 +610,6 @@ size_t wivrn::UDP::send_many_raw(std::span<serialization_packet> packets)
 
 // TCP records: uint32 payload length (in clear), payload, then a GCM tag when encrypted.
 // The length is authenticated as additional data.
-static constexpr size_t tcp_max_payload = 16 * 1024 * 1024;
 
 wivrn::deserialization_packet wivrn::TCP::next_record()
 {
@@ -621,7 +620,7 @@ wivrn::deserialization_packet wivrn::TCP::next_record()
 	memcpy(&payload_size, data.data(), sizeof(payload_size)); // Records are not aligned
 	if (payload_size == 0)
 		throw std::runtime_error("Invalid packet: 0 size");
-	if (payload_size > tcp_max_payload)
+	if (payload_size > max_payload)
 		throw std::runtime_error("Invalid packet: size " + std::to_string(payload_size));
 
 	const size_t overhead = decrypter ? tag_length : 0;
@@ -666,7 +665,7 @@ wivrn::deserialization_packet wivrn::TCP::receive_raw()
 	{
 		uint32_t payload_size;
 		memcpy(&payload_size, data.data(), sizeof(payload_size)); // Records are not aligned
-		if (payload_size > tcp_max_payload)
+		if (payload_size > max_payload)
 			throw std::runtime_error("Invalid packet: size " + std::to_string(payload_size));
 		expected_size = payload_size + sizeof(uint32_t) + (decrypter ? tag_length : 0) - data.size_bytes();
 	}

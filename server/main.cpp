@@ -436,6 +436,10 @@ void update_fsm()
 			runtime_setter.reset();
 
 			g_timeout_add(delay_next_try.count(), [](void *) {
+				// A headset may have connected since this was scheduled: listening again would
+				// start a second connection_thread over the running one
+				if (server_watch != 0 or connection_thread or quitting_main_loop)
+					return G_SOURCE_REMOVE;
 				start_listening();
 				start_publishing();
 				wivrn_server_set_headset_connected(dbus_server, false);
