@@ -18,6 +18,14 @@ paths:
   - evicting by start order let a burst of junk connections cancel a headset mid-handshake;
   - leaving newcomers queued in the gate let a flood of ~32 stalled connections/s lock it out.
   - `authenticate` must report its waits (the `waiting` callback) for this to work.
+- Accepted risk: a LAN flood (~60k connections/s from 32+ addresses, reconnecting at once) keeps
+  every slot younger than `stall_after`, so paired headsets are dropped until the flood stops.
+  - Before its first record, a headset looks the same as any other connection, so no admission
+    rule can rank it above the flood.
+  - Rejected fixes: per-address rate limits (32 addresses still take freed slots ~80x faster
+    than a headset retries); evicting young attempts (brings back the junk-burst bug above);
+    priority for a claimed known key (the key is sent in clear, so it can be replayed, and a slot
+    lasts less than a Wi-Fi round trip).
 - Of the stalled attempts it evicts the longest waiter. The other ordering is no better (XERK-2766):
   - A person typing the PIN (up to 2 min) is the longest waiter, so 16 stalled LAN peers that keep
     reconnecting can stop pairing; paired headsets (~0.15 s) are unaffected. Accepted as LAN risk.
