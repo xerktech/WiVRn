@@ -70,6 +70,9 @@ public:
 	};
 
 	std::map<std::string, server_data> servers;
+	// "servers" entries that could not be parsed, as minified JSON: they are not
+	// usable, but save() writes them back so a hand-fixable entry is not lost.
+	std::vector<std::string> unparsed_servers;
 	float preferred_refresh_rate = 0;
 	std::optional<float> minimum_refresh_rate;
 	float resolution_scale = 1.2;

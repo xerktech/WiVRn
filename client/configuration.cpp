@@ -292,6 +292,7 @@ configuration::configuration(xr::system & system, xr::session & session, const s
 				catch (std::exception & e)
 				{
 					spdlog::warn("Ignoring invalid server entry in configuration: {}", e.what());
+					unparsed_servers.push_back(simdjson::minify(entry));
 				}
 			}
 		}
@@ -421,6 +422,9 @@ void configuration::save()
 			ss << "},";
 		}
 	}
+
+	for (const auto & entry: unparsed_servers)
+		ss << entry << ",";
 
 	std::string servers_str = ss.str();
 	if (servers_str != "")
