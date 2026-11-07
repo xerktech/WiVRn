@@ -135,6 +135,8 @@ public:
 // - a junk record fails by itself without waiting.
 // If nothing has stalled that long, the new connection is dropped rather than left queued, so a
 // flood does not build a backlog in front of the headset (which has to connect again).
+// Known limit, accepted: peers on many addresses that reconnect faster than stall_after keep every
+// slot young, so headsets are dropped while that flood lasts (see .claude/rules/server-handshake.md).
 // Tests: test_handshake_pool in server/handshake_pool_ut.cpp.
 template <typename Result>
 class handshake_pool
