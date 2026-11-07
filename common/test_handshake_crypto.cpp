@@ -292,6 +292,34 @@ void test_pin_check_binding()
 }
 } // namespace
 
+// The headset shows this fingerprint so its user can check it against fenrir's headset
+// confirmation page. The expected value was computed outside WiVRn the way fenrir's
+// headsetFingerprint does: SHA-256 of the base64-decoded PEM body, first 8 bytes, hex in 4s.
+void test_public_key_fingerprint()
+{
+	// Throwaway X448 key, only used here
+	const char * private_pem =
+	        "-----BEGIN PRIVATE KEY-----\n"
+	        "MEYCAQAwBQYDK2VvBDoEOFyb3rBN0EGyY3KPyuj/1O/pZlm4+iSZBg9GDM2JGJ4D\n"
+	        "R6xokOoXB+sBkysWiJkWnI/w8t1mPGXn\n"
+	        "-----END PRIVATE KEY-----\n";
+	const char * public_pem =
+	        "-----BEGIN PUBLIC KEY-----\n"
+	        "MEIwBQYDK2VvAzkAZKjZa0UJsTolyGPneaMxuwriK/FGJCq5rxeuJ14hq3LkELZK\n"
+	        "rg1AX2vFs8HZOdljZfTR2fU6jww=\n"
+	        "-----END PUBLIC KEY-----\n";
+	const std::string expected = "9b0c 4b20 a4ef 1a4a";
+
+	auto priv = crypto::key::from_private_key(private_pem);
+	CHECK(priv.public_key_fingerprint() == expected);
+	CHECK(crypto::key::from_public_key(public_pem).public_key_fingerprint() == expected);
+	CHECK(priv.public_key() == public_pem);
+
+	auto other = crypto::key::generate_x448_keypair();
+	CHECK(other.public_key_fingerprint() != expected);
+	CHECK(other.public_key_fingerprint().size() == 19);
+}
+
 int main()
 {
 	char tmpl[] = "/tmp/wivrn-handshake-test-XXXXXX";
@@ -304,6 +332,7 @@ int main()
 	test_trusted_keys(dir);
 	test_session_keys();
 	test_pin_check_binding();
+	test_public_key_fingerprint();
 
 	std::filesystem::remove_all(dir);
 	std::cout << "All handshake crypto tests passed\n";

@@ -227,6 +227,8 @@ void scenes::lobby::gui_enter_pin(locked_notifiable<pin_request_data> & pin_requ
 
 	ImGui::PopStyleVar(); // ImGuiStyleVar_ItemSpacing
 
+	gui_headset_key_fingerprint();
+
 	if (pin_buffer.size() == pin_size)
 	{
 		pin_request->pin = pin_buffer;
@@ -821,6 +823,22 @@ void scenes::lobby::gui_about()
 	ImGui::SetCursorPosX(win_width / 4);
 
 	ImGui::Image(about_picture, {win_width / 2, win_width / 2});
+
+	ImGui::Dummy(ImVec2(0, 20));
+	gui_headset_key_fingerprint();
+}
+
+// The key fingerprint lets the user tell this headset's key apart from another one the server
+// knows, e.g. on a page that asks them to confirm a newly paired headset.
+void scenes::lobby::gui_headset_key_fingerprint()
+{
+	if (not keypair)
+		return;
+
+	const auto & t = wivrn::ui::current();
+	ImGui::PushStyleColor(ImGuiCol_Text, t.text_muted);
+	ImGui::TextWrapped("%s", fmt::format(_F("This headset's key: {}"), keypair.public_key_fingerprint()).c_str());
+	ImGui::PopStyleColor();
 }
 
 void scenes::lobby::gui_first_run()

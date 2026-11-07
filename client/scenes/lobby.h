@@ -248,6 +248,7 @@ class lobby : public scene_impl<lobby>
 	void gui_debug_node_hierarchy(entt::entity root = entt::null);
 	void gui_debug();
 	void gui_about();
+	void gui_headset_key_fingerprint();
 	void gui_licenses();
 	void gui_keyboard();
 	void gui_first_run();

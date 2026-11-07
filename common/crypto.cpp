@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <array>
+#include <memory>
 #include <openssl/core_names.h>
 #include <openssl/ec.h>
 #include <openssl/err.h>
@@ -27,6 +28,7 @@
 #include <openssl/kdf.h>
 #include <openssl/params.h>
 #include <openssl/pem.h>
+#include <openssl/x509.h>
 #include <stdexcept>
 #include <string>
 
@@ -236,6 +238,28 @@ std::string key::private_key() const
 	bio mem;
 	PEM_write_bio_PrivateKey(mem, pkey, nullptr, nullptr, 0, nullptr, nullptr);
 	return mem;
+}
+
+std::string key::public_key_fingerprint() const
+{
+	unsigned char * der = nullptr;
+	int size = i2d_PUBKEY(pkey, &der);
+	if (size <= 0)
+		throw_openssl_error();
+
+	std::unique_ptr<unsigned char, decltype([](unsigned char * p) { OPENSSL_free(p); })> der_owner{der};
+	auto digest = sha256(std::span<const uint8_t>(der, size));
+
+	static const char hex[] = "0123456789abcdef";
+	std::string out;
+	for (int i = 0; i < 8; i++)
+	{
+		if (i > 0 and i % 2 == 0)
+			out += ' ';
+		out += hex[digest[i] >> 4];
+		out += hex[digest[i] & 0xf];
+	}
+	return out;
 }
 
 std::vector<uint8_t> key::raw_public_key() const
