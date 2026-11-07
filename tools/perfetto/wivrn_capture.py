@@ -34,8 +34,13 @@ TRACEBOX_URL = "https://get.perfetto.dev/tracebox"
 
 def xdg(var, default_rel):
     """Resolve an XDG base directory."""
-    val = os.environ.get(var)
-    return Path(val) if val else Path.home() / default_rel
+    val = os.environ.get(var, "")
+    if val.startswith("/"):
+        return Path(val)
+    # Unset, empty or relative values are ignored, and HOME follows the same rule, as in
+    # wivrn-server (common/utils/xdg_base_directory.cpp), which then falls back to "."
+    home = os.environ.get("HOME", "")
+    return Path(home) / default_rel if home.startswith("/") else Path(".")
 
 
 def strip_ftrace_blocks(text):
@@ -152,7 +157,8 @@ def err(msg):
 def main():
     cache_dir = xdg("XDG_CACHE_HOME", ".cache") / "wivrn"
     tracebox = cache_dir / "tracebox"
-    sock_dir = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp"))
+    xdg_runtime_dir = os.environ.get("XDG_RUNTIME_DIR", "")
+    sock_dir = Path(xdg_runtime_dir if xdg_runtime_dir.startswith("/") else "/tmp")
     producer_sock = sock_dir / "wivrn-perfetto-producer.sock"
     consumer_sock = sock_dir / "wivrn-perfetto-consumer.sock"
 

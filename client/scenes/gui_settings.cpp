@@ -28,6 +28,7 @@
 #include "application.h"
 #include "configuration.h"
 #include "decoder/decoder.h"
+#include "identity.h"
 #include "render/imgui_impl.h"
 #include "render/ui_theme.h"
 #include "render/ui_widgets.h"
@@ -875,7 +876,7 @@ void settings_system(const settings_context & ctx)
 	            true) == 1)
 	{
 		std::error_code ec;
-		std::filesystem::remove(application::get_trusted_servers_path(), ec);
+		wivrn::forget_trusted_keys(application::get_trusted_servers_path(), ec);
 		if (ec)
 			spdlog::warn("Cannot remove {}: {}", application::get_trusted_servers_path().string(), ec.message());
 	}

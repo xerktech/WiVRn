@@ -136,10 +136,12 @@ void read_dict(binary_reader & in, T & visitor, const std::vector<std::string> *
 	}
 }
 
+// Empty when HOME is unset, empty or relative: Steam is then not looked up under it, rather than
+// relative to the working directory.
 std::filesystem::path home()
 {
 	auto home = std::getenv("HOME");
-	return home ? home : "";
+	return home and home[0] == '/' ? home : "";
 }
 
 std::optional<uint32_t> guess_steam_userid(const std::filesystem::path & root)
@@ -451,15 +453,19 @@ std::vector<wivrn::steam> wivrn::steam::find_installations()
 		return false;
 	};
 
+	const bool has_home = not h.empty();
+	const auto data_home = xdg_data_home();
+
 	// Flatpak Steam
-	try_construct(h / ".var/app/com.valvesoftware.Steam/.steam/steam", true);
+	if (has_home)
+		try_construct(h / ".var/app/com.valvesoftware.Steam/.steam/steam", true);
 
 	// Debian Steam (accessed from flatpak)
-	try_construct(h / ".steam/debian-installation")
+	(has_home and try_construct(h / ".steam/debian-installation"))
 	        // system Steam
-	        or try_construct(xdg_data_home() / "Steam")
+	        or (data_home.is_absolute() and try_construct(data_home / "Steam"))
 	        // system Steam (accessed from flatpak)
-	        or try_construct(h / ".local/share/Steam");
+	        or (has_home and try_construct(h / ".local/share/Steam"));
 
 	return res;
 }

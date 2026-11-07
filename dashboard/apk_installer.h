@@ -41,21 +41,13 @@ class apk_installer : public QObject
 	bool m_busy = false;
 
 	QUrl m_apkUrl;
-	QString m_latestVersion;
 
 public:
 	apk_installer();
 
 	// Version information
-	Q_PROPERTY(bool isTagged READ isTagged CONSTANT)
 	Q_PROPERTY(QString currentVersion READ currentVersion CONSTANT)
-	Q_PROPERTY(QString latestVersion READ latestVersion NOTIFY latestVersionChanged)
-	bool isTagged() const;
 	QString currentVersion() const;
-	QString latestVersion() const
-	{
-		return m_latestVersion;
-	}
 
 	Q_PROPERTY(QString filePath READ filePath NOTIFY filePathChanged)
 	Q_PROPERTY(double bytesReceived READ bytesReceived NOTIFY bytesReceivedChanged)
@@ -117,7 +109,6 @@ private:
 	QCoro::Task<> doInstallApk(QString serial);
 
 Q_SIGNALS:
-	void latestVersionChanged(QString);
 	void filePathChanged(QString);
 	void bytesReceivedChanged(double);
 	void bytesTotalChanged(double);

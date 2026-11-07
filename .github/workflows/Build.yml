@@ -107,6 +107,10 @@ jobs:
       if: ${{ matrix.config.preset == 'server' }}
       run: timeout 120 ${{github.workspace}}/build/common/test-handshake-crypto
 
+    - name: Test XDG base directories
+      if: ${{ matrix.config.preset == 'server' }}
+      run: timeout 60 ${{github.workspace}}/build/common/test-xdg-base-directory
+
     - name: Publish build dependencies
       if: ${{ matrix.config.preset == 'server' }}
       uses: actions/upload-artifact@v7

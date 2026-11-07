@@ -31,11 +31,6 @@ apk_installer::apk_installer()
 	m_apkFile.setFileName(QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/wivrn-" + QString::fromStdString(wivrn::git_commit) + ".apk");
 }
 
-bool apk_installer::isTagged() const
-{
-	return wivrn::is_tag;
-}
-
 QString apk_installer::currentVersion() const
 {
 	return wivrn::display_version();
@@ -47,36 +42,17 @@ QCoro::Task<> apk_installer::doRefreshLatestVersion()
 	m_apkUrl = QUrl{};
 
 	busyChanged(m_busy = true);
-	latestVersionChanged(m_latestVersion = "");
-
-	std::unique_ptr<QNetworkReply> reply{co_await manager.get(QNetworkRequest{QUrl{"https://api.github.com/repos/WiVRn/WiVRn/releases/latest"}})};
-
-	if (auto error = reply->error(); error != QNetworkReply::NetworkError::NoError)
-	{
-		qWarning() << "Cannot get version information from https://api.github.com/repos/WiVRn/WiVRn/releases/latest:" << error;
-	}
-	else
-	{
-		auto json = nlohmann::json::parse(reply->readAll());
-		m_latestVersion = QString::fromStdString(json["tag_name"]);
-		if (m_latestVersion.startsWith('v'))
-			m_latestVersion = m_latestVersion.mid(1);
-
-		latestVersionChanged(m_latestVersion);
-		qDebug() << "Latest version is" << m_latestVersion;
-
-		qDebug() << "Getting release metadata";
-	}
 
 	// xerktech fork: its headset protocol is incompatible with upstream, so
-	// only the APK built from this exact commit will work. The fork's
-	// APK-Release workflow publishes it as wivrn-xerktech-<sha>.apk under the
-	// apk-<sha> release of xerktech/WiVRn. GitVersion.cmake ignores those apk-*
-	// tags so git_commit stays the bare sha.
+	// only the APK built from this exact commit will work, never upstream's
+	// releases or the Meta store app. The fork's APK-Release workflow publishes
+	// it as wivrn-xerktech-<sha>.apk under the apk-<sha> release of
+	// xerktech/WiVRn. GitVersion.cmake keeps git_commit the bare sha, ignoring
+	// apk-* tags and using the commit for tagged builds too.
 	const QUrl metadata_url = QString{"https://api.github.com/repos/xerktech/WiVRn/releases/tags/apk-"} + wivrn::git_commit;
 	const std::string apk_name = std::string{"wivrn-xerktech-"} + wivrn::git_commit + ".apk";
 
-	reply.reset(co_await manager.get(QNetworkRequest{metadata_url}));
+	std::unique_ptr<QNetworkReply> reply{co_await manager.get(QNetworkRequest{metadata_url})};
 
 	if (auto error = reply->error(); error != QNetworkReply::NoError)
 	{

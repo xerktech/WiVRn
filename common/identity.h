@@ -31,4 +31,8 @@ crypto::key load_or_create_identity_key(const std::filesystem::path & path);
 // The headset uses it to pin the identity key of each server it paired with.
 bool is_trusted_key(const std::filesystem::path & path, const crypto::key & key);
 void add_trusted_key(const std::filesystem::path & path, const crypto::key & key);
+
+// Forget every trusted key: connecting to any server without its PIN is refused until it is paired
+// again. A missing file is not an error.
+void forget_trusted_keys(const std::filesystem::path & path, std::error_code & ec);
 } // namespace wivrn

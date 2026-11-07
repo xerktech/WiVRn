@@ -49,13 +49,17 @@ if (WIVRN_BUILD_DASHBOARD OR WIVRN_BUILD_SERVER)
 
         target_link_libraries(list-apps wivrn-common-server)
 
+        add_executable(test-xdg-base-directory test_xdg_base_directory.cpp)
+        target_link_libraries(test-xdg-base-directory wivrn-common-base)
+
         add_executable(vdf utils/vdf.cpp)
         target_compile_definitions(vdf PRIVATE WIVRN_BUILD_TEST)
         target_link_libraries(vdf Boost::iostreams)
 
         if (WIVRN_BUILD_SERVER)
             add_executable(test-handshake-crypto test_handshake_crypto.cpp)
-            target_link_libraries(test-handshake-crypto wivrn-common)
+            # wivrn_packets.h needs the OpenXR headers, taken from Monado like the server
+            target_link_libraries(test-handshake-crypto wivrn-common xrt-external-openxr)
         endif()
     endif()
 endif()

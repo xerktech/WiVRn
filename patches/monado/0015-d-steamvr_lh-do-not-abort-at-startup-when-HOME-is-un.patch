@@ -1,0 +1,56 @@
+From 86ef76faab988af5f05280b32e4d222323a23ff1 Mon Sep 17 00:00:00 2001
+From: Malcolm Habeeb <malcolm@tesoroxp.com>
+Date: Sat, 7 Nov 2026 00:56:33 -0500
+Subject: [PATCH] d/steamvr_lh: do not abort at startup when HOME is unset
+
+STEAM_INSTALL_DIR was built during static initialisation from
+std::string(getenv("HOME")), which throws std::logic_error for a null
+pointer, so every program linking the driver (wivrn-server included)
+aborted before main when HOME was unset. Leave it empty when HOME is
+unset or relative, and fail device creation up front then, so no Steam
+path falls back to the filesystem root.
+---
+ src/xrt/drivers/steamvr_lh/steamvr_lh.cpp | 20 +++++++++++++++++++-
+ 1 file changed, 19 insertions(+), 1 deletion(-)
+
+diff --git a/src/xrt/drivers/steamvr_lh/steamvr_lh.cpp b/src/xrt/drivers/steamvr_lh/steamvr_lh.cpp
+index 54ab0990c..a941a6d8b 100644
+--- a/src/xrt/drivers/steamvr_lh/steamvr_lh.cpp
++++ b/src/xrt/drivers/steamvr_lh/steamvr_lh.cpp
+@@ -88,7 +88,19 @@ static constexpr size_t MAX_CONTROLLERS = 16;
+ 
+ 
+ // ~/.steam/root is a symlink to where the Steam root is
+-const std::string STEAM_INSTALL_DIR = std::string(getenv("HOME")) + "/.steam/root";
++std::string
++get_steam_install_dir()
++{
++	// Runs during static initialisation: constructing a std::string from a null HOME would
++	// abort every program linking this driver before main. Empty when HOME is unusable.
++	const char *home = getenv("HOME");
++	if (home == nullptr || home[0] != '/') {
++		return std::string();
++	}
++	return std::string(home) + "/.steam/root";
++}
++
++const std::string STEAM_INSTALL_DIR = get_steam_install_dir();
+ constexpr auto STEAMVR_APPID = "250820";
+ 
+ // Parse libraryfolder.vdf to find where SteamVR is installed
+@@ -1006,6 +1018,12 @@ extern "C" enum xrt_result
+ steamvr_lh_create_devices(struct xrt_prober *xp, struct xrt_system_devices *xsysd)
+ {
+ 	u_logging_level level = debug_get_log_option_lh_log();
++	// Every Steam path below is relative to the Steam install: without one they would point at
++	// the filesystem root (/config, /steamapps), so give up instead.
++	if (STEAM_INSTALL_DIR.empty()) {
++		U_LOG_IFL_E(level, "HOME is unset or not an absolute path, cannot find the Steam install");
++		return xrt_result::XRT_ERROR_DEVICE_CREATION_FAILED;
++	}
+ 	// The driver likes to create a bunch of transient folders -
+ 	// let's try to make sure they're created where they normally are.
+ 	std::filesystem::path dir = STEAM_INSTALL_DIR + "/config/lighthouse";
+-- 
+2.43.0
+

@@ -16,8 +16,10 @@
  */
 
 // Tests the server-authentication pieces of the handshake: identity key storage, the headset's
-// trusted server list, session key derivation and the PIN check binding.
+// trusted server list (and forgetting it), the server_key_error state sent when the identity key
+// cannot be loaded, session key derivation and the PIN check binding.
 
+#include "handshake_identity.h"
 #include "identity.h"
 #include "secrets.h"
 #include "smp.h"
@@ -34,6 +36,7 @@
 #include <sys/stat.h>
 #include <thread>
 #include <unistd.h>
+#include <variant>
 
 #define CHECK(x)                                                                            \
 	do                                                                                  \
@@ -240,6 +243,85 @@ void test_trusted_keys(const std::filesystem::path & dir)
 	CHECK((st.st_mode & 0777) == 0600);
 }
 
+void test_forget_trusted_keys(const std::filesystem::path & dir)
+{
+	auto path = dir / "forget" / "trusted_servers";
+	std::filesystem::create_directories(path.parent_path());
+	crypto::key a = crypto::key::generate_x448_keypair();
+	crypto::key b = crypto::key::generate_x448_keypair();
+	wivrn::add_trusted_key(path, a);
+	wivrn::add_trusted_key(path, b);
+
+	std::error_code ec;
+	wivrn::forget_trusted_keys(path, ec);
+	CHECK(not ec);
+	// The headset refuses client_already_paired from a server it no longer trusts
+	CHECK(not wivrn::is_trusted_key(path, a));
+	CHECK(not wivrn::is_trusted_key(path, b));
+
+	// Forgetting with nothing stored is not an error
+	wivrn::forget_trusted_keys(path, ec);
+	CHECK(not ec);
+
+	// Pairing again with the PIN trusts the server again
+	wivrn::add_trusted_key(path, a);
+	CHECK(wivrn::is_trusted_key(path, a));
+	CHECK(not wivrn::is_trusted_key(path, b));
+}
+
+// Receive one packet, waiting up to 1s. receive() never blocks and throws EAGAIN when nothing is
+// readable, so only call it once poll() says there is data.
+template <typename Socket>
+auto receive_one(Socket & socket)
+{
+	for (int i = 0; i < 100; i++)
+	{
+		pollfd pfd{.fd = socket.get_fd(), .events = POLLIN};
+		if (::poll(&pfd, 1, 10) <= 0)
+			continue;
+		if (auto packet = socket.receive())
+			return *packet;
+	}
+	CHECK(false);
+	__builtin_unreachable();
+}
+
+void test_identity_key_error(const std::filesystem::path & dir)
+{
+	using wivrn::to_headset::crypto_handshake;
+	auto [server_fd, headset_fd] = tcp_pair();
+	wivrn::typed_socket<wivrn::TCP, wivrn::from_headset::packets, wivrn::to_headset::packets> server{server_fd};
+	wivrn::typed_socket<wivrn::TCP, wivrn::to_headset::packets, wivrn::from_headset::packets> headset{headset_fd};
+	auto send = [&](auto && packet) { server.send(std::forward<decltype(packet)>(packet)); };
+
+	auto path = dir / "key_error" / "server_key.pem";
+	auto load = [&] { return wivrn::load_or_create_identity_key(path); };
+
+	// A loadable key is returned and nothing is sent: the caller sends the real handshake
+	crypto::key key = wivrn::identity_key_or_notify(load, send);
+	CHECK(key.raw_public_key() == wivrn::load_or_create_identity_key(path).raw_public_key());
+	pollfd pfd{.fd = headset_fd, .events = POLLIN};
+	CHECK(::poll(&pfd, 1, 100) == 0);
+
+	// A corrupted key file: the headset is told why before the server gives up
+	std::ofstream{path} << "garbage";
+	bool threw = false;
+	try
+	{
+		wivrn::identity_key_or_notify(load, send);
+	}
+	catch (std::exception &)
+	{
+		threw = true;
+	}
+	CHECK(threw);
+	CHECK(std::filesystem::file_size(path) == 7); // never replaced
+
+	auto packet = receive_one(headset);
+	CHECK(std::holds_alternative<crypto_handshake>(packet));
+	CHECK(std::get<crypto_handshake>(packet).state == crypto_handshake::crypto_state::server_key_error);
+}
+
 void test_session_keys()
 {
 	crypto::key headset = crypto::key::generate_x448_keypair();
@@ -330,6 +412,8 @@ int main()
 	test_identity_key_race(dir);
 	test_no_plaintext_before_key_change();
 	test_trusted_keys(dir);
+	test_forget_trusted_keys(dir);
+	test_identity_key_error(dir);
 	test_session_keys();
 	test_pin_check_binding();
 	test_public_key_fingerprint();
