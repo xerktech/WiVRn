@@ -47,6 +47,9 @@ class systemd_units_manager : public children_manager
 	std::unique_ptr<systemdManager, deleter> proxy;
 	std::unordered_map<std::string, std::string> jobs;
 	std::unordered_set<std::unique_ptr<unitUnit, deleter>> units;
+	// Started units whose proxy is being created: still running, or the manager could be deleted
+	// (update_fsm resets it once nothing runs) before the proxy callback, which uses it
+	int pending_units = 0;
 
 	std::function<void()> state_changed_cb;
 

@@ -79,7 +79,7 @@ systemd_units_manager::systemd_units_manager(GDBusConnection * connection, std::
 
 bool systemd_units_manager::running() const
 {
-	return not(jobs.empty() and units.empty());
+	return not(jobs.empty() and units.empty() and pending_units == 0);
 }
 
 void systemd_units_manager::notify_if_stopped()
@@ -130,6 +130,7 @@ void systemd_units_manager::on_job_removed(
 			object += std::format("_{:02x}", *c);
 	}
 
+	++self->pending_units;
 	unit_unit_proxy_new(
 	        self->connection,
 	        G_DBUS_PROXY_FLAGS_NONE,
@@ -138,6 +139,7 @@ void systemd_units_manager::on_job_removed(
 	        nullptr,
 	        [](GObject * source_object, GAsyncResult * res, void * self_) {
 		        auto self = (systemd_units_manager *)(self_);
+		        --self->pending_units;
 
 		        GError * error = nullptr;
 

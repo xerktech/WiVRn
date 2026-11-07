@@ -338,6 +338,11 @@ void kill_server()
 {
 	wivrn_ipc_socket_main_loop->send(to_monado::stop{});
 
+	// Already stopping (SIGINT twice): replacing the pending timer would leak it, and it would then
+	// signal the process group after the server was reaped
+	if (server_kill_watch)
+		return;
+
 	// Send SIGTERM after 1s if it is still running
 	server_kill_watch = g_timeout_add(3500, [](void *) {
 		assert(server_pid > 0);
@@ -409,7 +414,8 @@ void stop_publishing()
 void update_fsm()
 {
 	bool server_running = server_watch != 0 or connection_thread;
-	bool app_running = children->running();
+	// children only exists once the D-Bus name is acquired
+	bool app_running = children and children->running();
 
 	if (quitting_main_loop)
 	{
@@ -464,7 +470,12 @@ int sigint(void * sig_nr)
 
 gboolean headset_connected_success(void *)
 {
-	assert(connection_thread);
+	// Quitting reset connection_thread after this was queued: do not start a session
+	if (not connection_thread)
+	{
+		connection.reset();
+		return G_SOURCE_REMOVE;
+	}
 	connection_thread.reset();
 
 	if (enc_state == wivrn_connection::encryption_state::pairing)
@@ -494,7 +505,9 @@ gboolean headset_connected_success(void *)
 
 gboolean headset_connected_failed(void *)
 {
-	assert(connection_thread);
+	// Quitting reset connection_thread after this was queued
+	if (not connection_thread)
+		return G_SOURCE_REMOVE;
 	connection_thread.reset();
 
 	update_fsm();
