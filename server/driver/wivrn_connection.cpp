@@ -95,7 +95,7 @@ public:
 		correct = true;
 	}
 
-	// An abandoned check counts as wrong: it may have been a guess
+	// A check that fails after it began (bad pin_check_3, send error) counts as wrong
 	~pin_attempt()
 	{
 		auto delay = pin_attempts.end(correct);
@@ -228,13 +228,15 @@ wivrn::authenticated_peer wivrn::wivrn_connection::authenticate(std::stop_token 
 
 					auto msg1 = std::get<from_headset::pin_check_1>(receive(2min)).message;
 
-					// Throttled from here: the peer learns whether its PIN matched from pin_check_4
-					pin_attempt attempt;
-
 					auto msg2 = pin_check.step2(msg1, pin_check_secret(pin, identity_key, headset_key));
 					control.send(to_headset::pin_check_2{msg2});
 
 					auto msg3 = std::get<from_headset::pin_check_3>(receive(10s)).message;
+
+					// Throttled from here, after the last wait on the peer: it learns whether its PIN
+					// matched only from pin_check_4, so a peer that stalls earlier learns nothing,
+					// holds no throttle and does not count as a wrong PIN
+					pin_attempt attempt;
 
 					auto [msg4, pin_match] = pin_check.step4(msg3);
 					control.send(to_headset::pin_check_4{msg4});

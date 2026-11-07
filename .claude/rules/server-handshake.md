@@ -22,6 +22,9 @@ paths:
   queued in it, including a headset that already sent its handshake.
 - Wrong PINs are throttled by `pin_throttle`, never by delaying the listener: paired headsets must
   not wait because someone guessed a PIN.
+- Take the `pin_attempt` only after the last `receive` of the PIN exchange (pin_check_3).
+  - Holding it across a peer wait let one stalled connection per 10 s block all pairing.
+  - SMP leaks nothing about the PIN before pin_check_4, so earlier steps need no throttle.
 
 ## Verifying without a full build
 - The full server needs Monado and many system packages; CI Build is the only full compile.
