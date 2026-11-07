@@ -96,8 +96,8 @@ public:
 // - a peer that stalls (never sends its PIN or its encrypted confirmation) waits indefinitely,
 // - a headset answers within a round trip, so it is not cancelled by a burst of new connections,
 // - a junk record fails by itself without waiting.
-// If nothing has stalled that long, the new connection is dropped (the peer retries) rather than
-// left queued, so a flood does not build a backlog in front of the headset.
+// If nothing has stalled that long, the new connection is dropped rather than left queued, so a
+// flood does not build a backlog in front of the headset (which has to connect again).
 // Tests: test_handshake_pool in server/handshake_pool_ut.cpp.
 template <typename Result>
 class handshake_pool
