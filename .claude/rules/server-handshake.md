@@ -4,11 +4,13 @@ paths:
   - server/accept_connection.*
   - server/handshake_pool*
   - server/driver/wivrn_connection.*
+  - server/driver/authenticate*
+  - server/driver/known_keys.h
   - common/wivrn_sockets.*
 ---
 # Server handshake
 
-- Handshakes run in two phases: `wivrn_connection::authenticate` (concurrent, one thread per peer
+- Handshakes run in two phases: `wivrn::authenticate` (concurrent, one thread per peer
   in `handshake_pool`) and `wivrn_connection::init` (one at a time, after a peer is authenticated).
   - Anything that can stall on the peer (PIN entry, first record) belongs in `authenticate`.
   - `authenticate` must only touch its own socket: no IPC socket, no UDP port bind.
@@ -38,7 +40,14 @@ paths:
 
 ## Verifying without a full build
 - The full server needs Monado and many system packages; CI Build is the only full compile.
-- `handshake_pool_ut` and `wivrn_sockets_ut` build standalone: see the g++ lines in
-  `.github/workflows/Sockets-UT.yml`. Also run them under `-fsanitize=thread`.
+- `handshake_pool_ut`, `wivrn_sockets_ut` and `authenticate_ut` build standalone: see the g++
+  lines in `.github/workflows/Sockets-UT.yml`. Also run them under `-fsanitize=thread`.
+- `authenticate.cpp` is its own file so its test links without configuration, IPC or Monado.
+  - It reaches the key store only through `known_keys.h`; the test defines those functions.
+  - Keep it that way: including `configuration.h` or `wivrn_ipc.h` there breaks the CI test.
 - `server/driver/wivrn_connection.cpp` syntax-checks with `g++ -fsyntax-only` given OpenXR SDK
   headers, nlohmann/json, boost/pfr and a stub `wivrn_config.h` defining `wivrn::default_port`.
+- OpenXR headers must be 1.1.59 (Ubuntu's 1.0.20 lacks types `wivrn_packets.h` uses).
+- `authenticate_ut`'s throttle test drives 7 wrong PINs, so the `pin_throttle` growth
+  (`initial_delay`, doubling) and the 8s wait in `pin_attempt` bound it: change them together.
+- LeakSanitizer aborts at exit in sandboxes without ptrace; run with `ASAN_OPTIONS=detect_leaks=0`.

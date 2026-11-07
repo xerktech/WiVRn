@@ -24,3 +24,17 @@ jobs:
         -lssl -lcrypto -o handshake_pool_ut
     - name: Run handshake_pool_ut
       run: ./handshake_pool_ut
+    # Packet definitions need OpenXR headers newer than Ubuntu's: same release as CMakeLists.txt
+    - name: Fetch OpenXR headers
+      run: |
+        curl -sSfL -o openxr.tar.gz https://github.com/KhronosGroup/OpenXR-SDK/archive/refs/tags/release-1.1.59.tar.gz
+        echo "d45d12d71cbe381a6fc510ec95ec84a88fe30724674e63bb038dfc9a481d8885  openxr.tar.gz" | sha256sum -c
+        tar xzf openxr.tar.gz --strip-components=1 --wildcards '*/include/openxr/*'
+    - name: Build authenticate_ut (ASan/UBSan)
+      run: >
+        g++ -std=c++23 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined
+        -Icommon -Iserver -Iserver/driver -Iinclude
+        server/driver/authenticate_ut.cpp server/driver/authenticate.cpp common/wivrn_sockets.cpp
+        common/crypto.cpp common/smp.cpp common/secrets.cpp -lssl -lcrypto -o authenticate_ut
+    - name: Run authenticate_ut
+      run: ./authenticate_ut

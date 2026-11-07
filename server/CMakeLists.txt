@@ -138,6 +138,7 @@ if (WIVRN_BUILD_SERVER)
 			driver/wivrn_generic_tracker.cpp
 			driver/wivrn_uinput.cpp
 			driver/wivrn_session.cpp
+			driver/authenticate.cpp
 			driver/wivrn_connection.cpp
 			driver/xrt_cast.cpp
 

@@ -19,7 +19,7 @@
 
 #pragma once
 
-#include "secrets.h"
+#include "authenticate.h"
 #include "wivrn_ipc.h"
 #include "wivrn_packets.h"
 #include "wivrn_sockets.h"
@@ -35,29 +35,11 @@
 
 namespace wivrn
 {
-class incorrect_pin : public std::runtime_error
-{
-public:
-	incorrect_pin();
-};
-
-struct authenticated_peer;
-
 class wivrn_connection
 {
 public:
-	enum class encryption_state
-	{
-		disabled,
-		enabled,
-		pairing,
-	};
+	using encryption_state = wivrn::encryption_state;
 
-	// First part of the handshake, up to the point where the peer has proven it holds a paired key
-	// (or the PIN). It only touches tcp, so several can run at once (see handshake_pool): a peer
-	// that stalls here cannot keep another headset out. Throws if the peer is refused.
-	// waiting is called with true when it starts waiting for the peer, false when data arrived.
-	static authenticated_peer authenticate(std::stop_token stop_token, encryption_state state, const std::string & pin, TCP && tcp, const std::function<void(bool)> & waiting = {});
 	authenticated_peer authenticate_peer(std::stop_token stop_token, TCP && tcp, const std::function<void(bool)> & waiting = {}) const;
 
 private:
@@ -182,16 +164,6 @@ public:
 		}
 		return r;
 	}
-};
-
-// Result of wivrn_connection::authenticate
-struct authenticated_peer
-{
-	TCP control;          // Keys already set
-	bool add_key = false; // Newly paired: store its key once the handshake completes
-	std::string public_key;
-	std::string name;
-	std::optional<secrets> keys; // Empty when encryption is disabled
 };
 
 } // namespace wivrn

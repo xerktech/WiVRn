@@ -517,7 +517,7 @@ gboolean headset_connected(gpointer user_data)
 			break;
 
 		handshakes->start(std::move(*tcp), [state = enc_state, pin = pin](std::stop_token stop, TCP && tcp, const std::function<void(bool)> & waiting) {
-			return wivrn_connection::authenticate(stop, state, pin, std::move(tcp), waiting);
+			return wivrn::authenticate(stop, state, pin, std::move(tcp), waiting);
 		});
 	}
 
