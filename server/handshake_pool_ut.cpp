@@ -130,13 +130,12 @@ static void test_handshake_pool()
 		for (int & c: clients)
 			pool.start(connect_from(listener, "127.0.0.6", c), [&](std::stop_token s, TCP && t) { return stall(s, std::move(t), cancelled); });
 		CHECK(pool.size() == 1);
-		CHECK(not pool.full());
 		for (int c: clients)
 			close(c);
 	}
 
 	{
-		// Different addresses fill it
+		// Stalled peers on many addresses cannot keep a new one out: the oldest stalled one makes room
 		handshake_pool<int> pool;
 		std::vector<int> clients(handshake_pool<int>::max_attempts);
 		for (size_t i = 0; i < clients.size(); ++i)
@@ -144,13 +143,22 @@ static void test_handshake_pool()
 			std::string addr = "127.0.1." + std::to_string(i + 1);
 			pool.start(connect_from(listener, addr.c_str(), clients[i]), [&](std::stop_token s, TCP && t) { return stall(s, std::move(t), cancelled); });
 		}
-		CHECK(pool.full());
+		CHECK(pool.size() == handshake_pool<int>::max_attempts);
+
+		int before = cancelled;
+		int headset;
+		pool.start(connect_from(listener, "127.0.2.1", headset), [](std::stop_token, TCP &&) { return 9; });
+		CHECK(pool.size() == handshake_pool<int>::max_attempts);
+		CHECK(take_within(pool, 2s) == 9);
+		std::this_thread::sleep_for(100ms);
+		pool.take(); // Reaps the evicted thread
+		CHECK(cancelled == before + 1);
 
 		// clear() returns with every thread stopped
-		int before = cancelled;
 		pool.clear();
 		CHECK(cancelled == before + int(clients.size()));
 		CHECK(pool.size() == 0);
+		close(headset);
 		for (int c: clients)
 			close(c);
 	}

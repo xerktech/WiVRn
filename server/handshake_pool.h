@@ -89,8 +89,9 @@ public:
 // Runs the authenticating part of several handshakes at once, each on its own thread, so a peer
 // that stalls (waiting for a PIN, sending a junk first record) cannot keep the headset out.
 // A peer gets at most one attempt: a new connection from the same address cancels its previous
-// one, so a headset that reconnects replaces its own stale attempt, and a single LAN peer cannot
-// fill the pool.
+// one, so a headset that reconnects replaces its own stale attempt. When the pool is full, the
+// oldest unfinished attempt is cancelled to make room, so peers using many addresses cannot keep a
+// new one out either: a headset authenticates in well under a second, a stalled peer never does.
 // Tests: test_handshake_pool in server/handshake_pool_ut.cpp.
 template <typename Result>
 class handshake_pool
@@ -137,17 +138,13 @@ public:
 		clear();
 	}
 
-	bool full() const
-	{
-		return attempts.size() >= max_attempts;
-	}
-
 	size_t size() const
 	{
 		return attempts.size();
 	}
 
-	// Starts a handshake on tcp, cancelling any attempt still running for the same peer address
+	// Starts a handshake on tcp, cancelling any attempt still running for the same peer address,
+	// and the oldest unfinished one if the pool is full
 	void start(TCP && tcp, handshake fn)
 	{
 		sockaddr_in6 addr{};
@@ -166,6 +163,15 @@ public:
 			}
 			else
 				++it;
+		}
+
+		if (attempts.size() >= max_attempts)
+		{
+			auto oldest = std::ranges::find_if(attempts, [](const attempt & a) { return not a.state->done.load(std::memory_order_acquire); });
+			if (oldest == attempts.end())
+				oldest = attempts.begin(); // All finished, none taken yet: drop the oldest result
+			oldest->thread.request_stop();
+			stale.splice(stale.end(), attempts, oldest);
 		}
 
 		auto state = std::make_shared<outcome>();

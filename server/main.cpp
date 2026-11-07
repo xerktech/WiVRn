@@ -503,7 +503,7 @@ gboolean headset_connected(gpointer user_data)
 
 	assert(handshakes);
 
-	while (not handshakes->full())
+	while (true)
 	{
 		std::optional<TCP> tcp = listener->poll();
 		if (not tcp)
