@@ -27,6 +27,7 @@
 #include <fstream>
 #include <functional>
 #include <magic_enum.hpp>
+#include <stdexcept>
 #include <string_view>
 #include <type_traits>
 #include <vector>
@@ -241,23 +242,44 @@ configuration::configuration(xr::system & system, xr::session & session, const s
 	{
 		simdjson::dom::parser parser;
 		simdjson::dom::element root = parser.load(config_path.native());
-		for (simdjson::dom::object i: simdjson::dom::array(root["servers"]))
-		{
-			server_data data{
-			        .autoconnect = i["autoconnect"].get_bool(),
-			        .manual = i["manual"].get_bool(),
-			        .visible = false,
-			        .compatible = true,
-			        .service = {
-			                .name = (std::string)i["pretty_name"],
-			                .hostname = (std::string)i["hostname"],
-			                .port = (int)i["port"].get_int64(),
-			                .tcp_only = i["tcp_only"].is_bool() && i["tcp_only"].get_bool(),
-			                .txt = {{"cookie", (std::string)i["cookie"]}}
+		if (not root.is_object())
+			throw std::runtime_error("not a JSON object");
 
-			        }};
-			servers.emplace(data.service.txt["cookie"], data);
+		// A missing or malformed server list, or a bad entry in it, must not stop
+		// the remaining settings from loading: skip what can't be read.
+		if (auto servers_val = root["servers"]; servers_val.is_array())
+		{
+			for (simdjson::dom::element entry: servers_val.get_array())
+			{
+				try
+				{
+					simdjson::dom::object i = entry;
+					int64_t port = i["port"].get_int64();
+					if (port < 1 or port > 65535)
+						throw std::out_of_range("port " + std::to_string(port) + " out of range");
+					server_data data{
+					        .autoconnect = i["autoconnect"].get_bool(),
+					        .manual = i["manual"].get_bool(),
+					        .visible = false,
+					        .compatible = true,
+					        .service = {
+					                .name = (std::string)i["pretty_name"],
+					                .hostname = (std::string)i["hostname"],
+					                .port = (int)port,
+					                .tcp_only = i["tcp_only"].is_bool() && i["tcp_only"].get_bool(),
+					                .txt = {{"cookie", (std::string)i["cookie"]}}
+
+					        }};
+					servers.emplace(data.service.txt["cookie"], data);
+				}
+				catch (std::exception & e)
+				{
+					spdlog::warn("Ignoring invalid server entry in configuration: {}", e.what());
+				}
+			}
 		}
+		else if (servers_val.error() != simdjson::NO_SUCH_FIELD)
+			spdlog::warn("Ignoring configuration \"servers\": not an array");
 
 		float default_refresh_rate = preferred_refresh_rate;
 
