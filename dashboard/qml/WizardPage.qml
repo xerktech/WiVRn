@@ -42,7 +42,6 @@ Kirigami.ScrollablePage {
         }
     }
 
-
     ConnectUsbDialog {
         id: select_usb_device
     }

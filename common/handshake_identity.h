@@ -17,8 +17,6 @@
 
 #pragma once
 
-#pragma once
-
 #include "crypto.h"
 #include "wivrn_packets.h"
 

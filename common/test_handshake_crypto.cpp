@@ -269,16 +269,18 @@ void test_forget_trusted_keys(const std::filesystem::path & dir)
 	CHECK(not wivrn::is_trusted_key(path, b));
 }
 
-// Receive one packet on a blocking-free socket, waiting up to 1s
+// Receive one packet, waiting up to 1s. receive() never blocks and throws EAGAIN when nothing is
+// readable, so only call it once poll() says there is data.
 template <typename Socket>
 auto receive_one(Socket & socket)
 {
 	for (int i = 0; i < 100; i++)
 	{
+		pollfd pfd{.fd = socket.get_fd(), .events = POLLIN};
+		if (::poll(&pfd, 1, 10) <= 0)
+			continue;
 		if (auto packet = socket.receive())
 			return *packet;
-		pollfd pfd{.fd = socket.get_fd(), .events = POLLIN};
-		::poll(&pfd, 1, 10);
 	}
 	CHECK(false);
 	__builtin_unreachable();

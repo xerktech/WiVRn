@@ -187,7 +187,8 @@ static std::string steam_command()
 		command = "PRESSURE_VESSEL_IMPORT_OPENXR_1_RUNTIMES=1 ";
 
 	std::string_view home{"\0", 1};
-	if (auto h = std::getenv("HOME"))
+	// An empty or relative HOME is ignored: an empty prefix would match every path
+	if (auto h = std::getenv("HOME"); h and h[0] == '/')
 		home = h;
 
 	if (auto p = active_runtime::openvr_compat_path().string(); not p.empty())

@@ -35,8 +35,12 @@ TRACEBOX_URL = "https://get.perfetto.dev/tracebox"
 def xdg(var, default_rel):
     """Resolve an XDG base directory."""
     val = os.environ.get(var, "")
-    # Unset, empty or relative values are ignored, as in wivrn-server
-    return Path(val) if val.startswith("/") else Path.home() / default_rel
+    if val.startswith("/"):
+        return Path(val)
+    # Unset, empty or relative values are ignored, and HOME follows the same rule, as in
+    # wivrn-server (common/utils/xdg_base_directory.cpp), which then falls back to "."
+    home = os.environ.get("HOME", "")
+    return Path(home) / default_rel if home.startswith("/") else Path(".")
 
 
 def strip_ftrace_blocks(text):

@@ -18,12 +18,26 @@ if (GIT_TAG)
 	set(GIT_DESC "${GIT_TAG}")
 	# xerktech fork: the dashboard fetches the APK by commit (release apk-<sha>), even for a
 	# tagged build, so use the commit when .git can tell it, the tag name otherwise.
+	# Only trust .git at the top of the source tree, not an unrelated enclosing repository (e.g. a
+	# packaging repo around a release tarball).
 	execute_process(
-		COMMAND ${GIT_EXECUTABLE} rev-parse HEAD
-		OUTPUT_VARIABLE GIT_COMMIT
+		COMMAND ${GIT_EXECUTABLE} rev-parse --show-toplevel
+		OUTPUT_VARIABLE GIT_TOPLEVEL
 		OUTPUT_STRIP_TRAILING_WHITESPACE
 		ERROR_QUIET
 	)
+	file(REAL_PATH "." SOURCE_DIR_REAL)
+	if (GIT_TOPLEVEL)
+		file(REAL_PATH "${GIT_TOPLEVEL}" GIT_TOPLEVEL)
+	endif()
+	if (GIT_TOPLEVEL STREQUAL SOURCE_DIR_REAL)
+		execute_process(
+			COMMAND ${GIT_EXECUTABLE} rev-parse HEAD
+			OUTPUT_VARIABLE GIT_COMMIT
+			OUTPUT_STRIP_TRAILING_WHITESPACE
+			ERROR_QUIET
+		)
+	endif()
 	if (NOT GIT_COMMIT)
 		set(GIT_COMMIT "${GIT_TAG}")
 	endif()
