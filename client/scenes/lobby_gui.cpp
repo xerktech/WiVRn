@@ -832,13 +832,15 @@ void scenes::lobby::gui_about()
 // knows, e.g. on a page that asks them to confirm a newly paired headset.
 void scenes::lobby::gui_headset_key_fingerprint()
 {
-	if (not keypair)
+	if (keypair_fingerprint.empty())
 		return;
 
+	// Label and fingerprint on separate lines so the fingerprint never wraps mid-way
 	const auto & t = wivrn::ui::current();
 	ImGui::PushStyleColor(ImGuiCol_Text, t.text_muted);
-	ImGui::TextWrapped("%s", fmt::format(_F("This headset's key: {}"), keypair.public_key_fingerprint()).c_str());
+	ImGui::TextWrapped("%s", _S("This headset's key:"));
 	ImGui::PopStyleColor();
+	ImGui::TextUnformatted(keypair_fingerprint.c_str());
 }
 
 void scenes::lobby::gui_first_run()

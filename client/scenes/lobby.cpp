@@ -187,6 +187,15 @@ scenes::lobby::lobby() :
 		std::ofstream{keypair_path} << keypair.private_key();
 		spdlog::info("Generated X448 keypair");
 	}
+
+	try
+	{
+		keypair_fingerprint = keypair.public_key_fingerprint();
+	}
+	catch (std::exception & e)
+	{
+		spdlog::warn("Cannot compute the headset key fingerprint: {}", e.what());
+	}
 }
 
 static std::string ip_address_to_string(const in_addr & addr)
