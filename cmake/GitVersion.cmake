@@ -2,6 +2,11 @@ if (GIT_TAG AND (GIT_DESC OR GIT_COMMIT))
 	message(FATAL_ERROR "cannot use GIT_DESC or GIT_COMMIT when using GIT_TAG")
 endif()
 
+# An exported GIT_DIR/GIT_WORK_TREE (e.g. when run from a git hook) would point git at another
+# repository and defeat the check below.
+unset(ENV{GIT_DIR})
+unset(ENV{GIT_WORK_TREE})
+
 # Only trust .git at the top of the source tree, not an unrelated enclosing repository (e.g. a
 # packaging repo around a release tarball): then the version must be passed in, as without .git.
 execute_process(
