@@ -338,8 +338,13 @@ configuration::configuration(xr::system & system, xr::session & session, const s
 	{
 		spdlog::warn("Cannot read configuration: {}", e.what());
 
+		// A missing or unreadable file (IO_ERROR) is not corruption: leave it alone.
+		auto * json_error = dynamic_cast<simdjson::simdjson_error *>(&e);
+		if (json_error and json_error->error() == simdjson::IO_ERROR)
+			return;
+
 		// The next save() rewrites the config from defaults, which would destroy
-		// the user's servers and settings: move the unreadable file aside first.
+		// the user's servers and settings: move the unparseable file aside first.
 		std::error_code ec;
 		if (std::filesystem::exists(config_path, ec))
 		{
@@ -348,6 +353,12 @@ configuration::configuration(xr::system & system, xr::session & session, const s
 			                       .count();
 			auto backup = config_path;
 			backup += ".bad-" + std::to_string(seconds);
+			// rename() silently replaces an existing target: never clobber an earlier backup
+			for (int n = 1; std::filesystem::exists(backup, ec); ++n)
+			{
+				backup = config_path;
+				backup += ".bad-" + std::to_string(seconds) + "-" + std::to_string(n);
+			}
 			std::filesystem::rename(config_path, backup, ec);
 			if (ec)
 				spdlog::warn("Cannot move unreadable configuration to {}: {}", backup.native(), ec.message());
