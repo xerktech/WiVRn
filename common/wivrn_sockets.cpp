@@ -29,6 +29,7 @@
 #include <netinet/tcp.h>
 #include <string.h>
 #include <string>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/uio.h>
@@ -250,12 +251,100 @@ wivrn::TCPListener::TCPListener(int port)
 		throw std::system_error{errno, std::generic_category()};
 	}
 
-	int backlog = 1;
+	int backlog = handshake_gate::max_pending;
 	if (listen(fd, backlog) < 0)
 	{
 		::close(fd);
 		throw std::system_error{errno, std::generic_category()};
 	}
+}
+
+namespace
+{
+enum class first_record
+{
+	incomplete,
+	complete,
+	invalid,
+};
+
+first_record peek_first_record(int fd)
+{
+	uint32_t payload_size;
+	ssize_t n = ::recv(fd, &payload_size, sizeof(payload_size), MSG_PEEK | MSG_DONTWAIT);
+	if (n == 0)
+		return first_record::invalid; // Closed by the peer
+	if (n < 0)
+		return (errno == EAGAIN or errno == EWOULDBLOCK or errno == EINTR) ? first_record::incomplete : first_record::invalid;
+	if (n < ssize_t(sizeof(payload_size)))
+		return first_record::incomplete;
+	if (payload_size == 0 or payload_size > wivrn::handshake_gate::max_first_record)
+		return first_record::invalid;
+
+	int available = 0;
+	if (::ioctl(fd, FIONREAD, &available) < 0)
+		return first_record::invalid;
+
+	return size_t(available) >= sizeof(payload_size) + payload_size ? first_record::complete : first_record::incomplete;
+}
+} // namespace
+
+wivrn::handshake_gate::handshake_gate(int port) :
+        listener(port)
+{
+	int flags = fcntl(listener.get_fd(), F_GETFL);
+	if (flags < 0 or fcntl(listener.get_fd(), F_SETFL, flags | O_NONBLOCK) < 0)
+		throw std::system_error{errno, std::generic_category()};
+}
+
+std::optional<wivrn::TCP> wivrn::handshake_gate::poll(std::chrono::steady_clock::time_point now)
+{
+	while (true)
+	{
+		int fd = ::accept4(listener.get_fd(), nullptr, nullptr, SOCK_CLOEXEC);
+		if (fd < 0)
+		{
+			if (errno == EINTR or errno == ECONNABORTED)
+				continue;
+			// EAGAIN: nothing left to accept; anything else is retried on the next poll
+			break;
+		}
+
+		try
+		{
+			TCP socket{fd};
+			if (pending.size() >= max_pending)
+				pending.pop_front();
+			pending.push_back({std::move(socket), now + first_record_timeout});
+		}
+		catch (std::exception &)
+		{
+			// TCP closes the descriptor when its setup fails
+		}
+	}
+
+	for (auto it = pending.begin(); it != pending.end();)
+	{
+		switch (peek_first_record(it->socket.get_fd()))
+		{
+			case first_record::complete: {
+				TCP socket = std::move(it->socket);
+				pending.erase(it);
+				return socket;
+			}
+			case first_record::invalid:
+				it = pending.erase(it);
+				break;
+			case first_record::incomplete:
+				if (now >= it->deadline)
+					it = pending.erase(it);
+				else
+					++it;
+				break;
+		}
+	}
+
+	return std::nullopt;
 }
 
 bool wivrn::UDP::is_replayed(uint64_t counter) const

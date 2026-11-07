@@ -33,7 +33,8 @@ std::unique_ptr<wivrn::TCP> wivrn::accept_connection(wivrn_session & cnx, std::s
 {
 	wivrn_ipc_socket_monado->send(from_monado::headset_disconnected{});
 
-	wivrn::TCPListener listener(configuration().port);
+	// Only a connection whose first record has arrived is returned, so an idle peer cannot block the headset
+	wivrn::handshake_gate listener(configuration().port);
 
 	pollfd fds[2]{
 	        {.fd = listener.get_fd(), .events = POLLIN},
@@ -42,16 +43,16 @@ std::unique_ptr<wivrn::TCP> wivrn::accept_connection(wivrn_session & cnx, std::s
 
 	while (not stop.stop_requested())
 	{
-		if (poll(fds, std::size(fds), 100) < 0)
+		if (poll(fds, std::size(fds), 50) < 0)
 		{
 			perror("poll");
 			return {};
 		}
 
-		if (fds[0].revents & POLLIN)
+		if (auto tcp = listener.poll())
 		{
 			wivrn_ipc_socket_monado->send(from_monado::headset_connected{});
-			return std::make_unique<wivrn::TCP>(listener.accept().first);
+			return std::make_unique<wivrn::TCP>(std::move(*tcp));
 		}
 
 		if (fds[1].revents & POLLIN)

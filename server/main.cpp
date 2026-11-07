@@ -83,7 +83,7 @@ extern "C"
 using namespace wivrn;
 using namespace std::chrono_literals;
 
-static std::unique_ptr<TCPListener> listener;
+static std::unique_ptr<handshake_gate> listener;
 std::optional<wivrn::typed_socket<wivrn::UnixDatagram, from_monado::packets, to_monado::packets>> wivrn_ipc_socket_main_loop;
 std::optional<wivrn::typed_socket<wivrn::UnixDatagram, to_monado::packets, from_monado::packets>> wivrn_ipc_socket_monado;
 
@@ -247,7 +247,7 @@ std::optional<active_runtime> runtime_setter;
 std::optional<avahi_publisher> publisher;
 std::optional<sleep_inhibitor> inhibitor;
 
-gboolean headset_connected(gint fd, GIOCondition condition, gpointer user_data);
+gboolean headset_connected(gpointer user_data);
 void stop_listening();
 void on_headset_info_packet(const wivrn::from_headset::headset_info_packet & info);
 void expose_known_keys_on_dbus();
@@ -348,11 +348,9 @@ void start_listening()
 
 	assert(listener_watch == 0);
 
-	listener = std::make_unique<TCPListener>(configuration().port);
-	auto source_listener = g_unix_fd_source_new(listener->get_fd(), GIOCondition::G_IO_IN);
-	g_source_set_callback(source_listener, G_SOURCE_FUNC(&headset_connected), nullptr, nullptr);
-	listener_watch = g_source_attach(source_listener, nullptr);
-	g_source_unref(source_listener);
+	listener = std::make_unique<handshake_gate>(configuration().port);
+	// Polled rather than watched: a connection is only handed over once its first record has arrived
+	listener_watch = g_timeout_add(50, &headset_connected, nullptr);
 }
 
 void stop_listening()
@@ -496,14 +494,17 @@ gboolean headset_connected_incorrect_pin(void *)
 	return G_SOURCE_REMOVE;
 }
 
-gboolean headset_connected(gint fd, GIOCondition condition, gpointer user_data)
+gboolean headset_connected(gpointer user_data)
 {
 	assert(server_watch == 0);
 	assert(not children->running());
 	assert(not connection_thread);
 	assert(listener);
 
-	TCP tcp = listener->accept().first;
+	std::optional<TCP> tcp = listener->poll();
+	if (not tcp)
+		return G_SOURCE_CONTINUE;
+
 	stop_listening();
 	stop_publishing();
 
@@ -524,7 +525,7 @@ gboolean headset_connected(gint fd, GIOCondition condition, gpointer user_data)
 			g_main_context_invoke(nullptr, &headset_connected_failed, nullptr);
 		}
 	},
-	                          std::move(tcp),
+	                          std::move(*tcp),
 	                          pin,
 	                          enc_state);
 
