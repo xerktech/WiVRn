@@ -56,8 +56,9 @@ public:
 	// First part of the handshake, up to the point where the peer has proven it holds a paired key
 	// (or the PIN). It only touches tcp, so several can run at once (see handshake_pool): a peer
 	// that stalls here cannot keep another headset out. Throws if the peer is refused.
-	static authenticated_peer authenticate(std::stop_token stop_token, encryption_state state, const std::string & pin, TCP && tcp);
-	authenticated_peer authenticate_peer(std::stop_token stop_token, TCP && tcp) const;
+	// waiting is called with true when it starts waiting for the peer, false when data arrived.
+	static authenticated_peer authenticate(std::stop_token stop_token, encryption_state state, const std::string & pin, TCP && tcp, const std::function<void(bool)> & waiting = {});
+	authenticated_peer authenticate_peer(std::stop_token stop_token, TCP && tcp, const std::function<void(bool)> & waiting = {}) const;
 
 private:
 	typed_socket<TCP, from_headset::packets, to_headset::packets> control;

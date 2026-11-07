@@ -34,7 +34,7 @@ std::optional<wivrn::authenticated_peer> wivrn::accept_connection(
         wivrn_session & cnx,
         std::stop_token stop,
         handshake_gate & listener,
-        std::function<authenticated_peer(std::stop_token, TCP &&)> authenticate,
+        std::function<authenticated_peer(std::stop_token, TCP &&, const std::function<void(bool)> &)> authenticate,
         std::function<void(wivrn_session &)> tick)
 {
 	wivrn_ipc_socket_monado->send(from_monado::headset_disconnected{});
@@ -58,7 +58,7 @@ std::optional<wivrn::authenticated_peer> wivrn::accept_connection(
 			return {};
 		}
 
-		while (handshakes.has_room())
+		while (true)
 		{
 			auto tcp = listener.poll();
 			if (not tcp)

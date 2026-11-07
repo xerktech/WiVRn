@@ -1275,7 +1275,7 @@ void wivrn_session::reconnect(std::stop_token stop)
 			        *this,
 			        stop,
 			        *gate,
-			        [this](std::stop_token stop, TCP && tcp) { return connection->authenticate_peer(stop, std::move(tcp)); },
+			        [this](std::stop_token stop, TCP && tcp, const std::function<void(bool)> & waiting) { return connection->authenticate_peer(stop, std::move(tcp), waiting); },
 			        &wivrn_session::quit_if_no_client);
 			if (stop.stop_requested())
 				return;

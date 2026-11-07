@@ -503,15 +503,14 @@ gboolean headset_connected(gpointer user_data)
 
 	assert(handshakes);
 
-	// Connections left in the gate while the pool has no room are handed over on a later tick
-	while (handshakes->has_room())
+	while (true)
 	{
 		std::optional<TCP> tcp = listener->poll();
 		if (not tcp)
 			break;
 
-		handshakes->start(std::move(*tcp), [state = enc_state, pin = pin](std::stop_token stop, TCP && tcp) {
-			return wivrn_connection::authenticate(stop, state, pin, std::move(tcp));
+		handshakes->start(std::move(*tcp), [state = enc_state, pin = pin](std::stop_token stop, TCP && tcp, const std::function<void(bool)> & waiting) {
+			return wivrn_connection::authenticate(stop, state, pin, std::move(tcp), waiting);
 		});
 	}
 

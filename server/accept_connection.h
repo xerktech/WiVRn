@@ -36,6 +36,6 @@ std::optional<authenticated_peer> accept_connection(
         wivrn_session & cnx,
         std::stop_token stop,
         handshake_gate & gate,
-        std::function<authenticated_peer(std::stop_token, TCP &&)> authenticate,
+        std::function<authenticated_peer(std::stop_token, TCP &&, const std::function<void(bool)> &)> authenticate,
         std::function<void(wivrn_session &)> tick = {});
 } // namespace wivrn

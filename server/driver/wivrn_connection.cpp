@@ -105,23 +105,33 @@ public:
 };
 } // namespace
 
-wivrn::authenticated_peer wivrn::wivrn_connection::authenticate_peer(std::stop_token stop_token, TCP && tcp) const
+wivrn::authenticated_peer wivrn::wivrn_connection::authenticate_peer(std::stop_token stop_token, TCP && tcp, const std::function<void(bool)> & waiting) const
 {
-	return authenticate(stop_token, state, pin, std::move(tcp));
+	return authenticate(stop_token, state, pin, std::move(tcp), waiting);
 }
 
-wivrn::authenticated_peer wivrn::wivrn_connection::authenticate(std::stop_token stop_token, encryption_state state, const std::string & pin, TCP && tcp)
+wivrn::authenticated_peer wivrn::wivrn_connection::authenticate(std::stop_token stop_token, encryption_state state, const std::string & pin, TCP && tcp, const std::function<void(bool)> & waiting)
 {
 	typed_socket<TCP, from_headset::packets, to_headset::packets> control(std::move(tcp));
 
 	auto receive = [&](std::chrono::seconds timeout) {
 		auto timeout_abs = std::chrono::steady_clock::now() + timeout;
+		bool waited = false;
+		auto got = [&](from_headset::packets && packet) {
+			if (waited and waiting)
+				waiting(false);
+			return std::move(packet);
+		};
 
 		while (true)
 		{
 			// Data may already be buffered from an earlier read
 			if (auto packet = control.receive_pending())
-				return std::move(*packet);
+				return got(std::move(*packet));
+
+			if (not waited and waiting)
+				waiting(true);
+			waited = true;
 
 			if (stop_token.stop_requested())
 				throw std::runtime_error("Connection cancelled");
@@ -137,7 +147,7 @@ wivrn::authenticated_peer wivrn::wivrn_connection::authenticate(std::stop_token 
 			if (fds.revents & POLLIN)
 			{
 				if (auto packet = control.receive())
-					return std::move(*packet);
+					return got(std::move(*packet));
 			}
 
 			if (std::chrono::steady_clock::now() > timeout_abs)
