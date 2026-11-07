@@ -208,7 +208,8 @@ public:
 // The server runs a single handshake at a time, so without this an idle or trickling peer on the
 // LAN would hold the only slot until the handshake times out and keep the headset out.
 // A peer whose first record is not complete within first_record_timeout is dropped, and when
-// max_pending connections are waiting the oldest is dropped to make room.
+// max_pending incomplete connections are waiting the oldest is dropped to make room.
+// Idle peers cost only a pending slot, so the timeout can stay long enough for TCP retransmits.
 class handshake_gate
 {
 	struct pending_connection
@@ -222,7 +223,7 @@ class handshake_gate
 
 public:
 	static constexpr size_t max_pending = 16;
-	static constexpr std::chrono::milliseconds first_record_timeout = std::chrono::seconds(2);
+	static constexpr std::chrono::milliseconds first_record_timeout = std::chrono::seconds(5);
 	// The first record is the small, unencrypted crypto handshake
 	static constexpr uint32_t max_first_record = 64 * 1024;
 

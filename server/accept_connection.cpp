@@ -36,8 +36,10 @@ std::unique_ptr<wivrn::TCP> wivrn::accept_connection(wivrn_session & cnx, std::s
 	// Only a connection whose first record has arrived is returned, so an idle peer cannot block the headset
 	wivrn::handshake_gate listener(configuration().port);
 
+	// The listener is not polled: when accept fails (e.g. out of descriptors) it stays readable and
+	// would spin this loop; the gate is checked every 50ms instead, like in the main loop.
 	pollfd fds[2]{
-	        {.fd = listener.get_fd(), .events = POLLIN},
+	        {.fd = -1},
 	        {.fd = wivrn_ipc_socket_monado->get_fd(), .events = POLLIN},
 	};
 

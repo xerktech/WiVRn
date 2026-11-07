@@ -498,8 +498,30 @@ static void test_handshake_gate()
 		gate_poll(gate, t0);
 	}
 	CHECK(gate.pending_count() == handshake_gate::max_pending);
+	// The two oldest were evicted (closed by the server), the newest was kept
+	CHECK(recv(flood[0], &c, 1, MSG_DONTWAIT) == 0);
+	CHECK(recv(flood[1], &c, 1, MSG_DONTWAIT) == 0);
+	CHECK(recv(flood[2], &c, 1, MSG_DONTWAIT) < 0 and errno == EAGAIN);
 	send_record(flood.back(), 8, 8);
 	CHECK(gate_poll(gate, t0).has_value());
+
+	// A burst of idle connects landing between two polls does not evict a peer that is ready
+	auto t1 = t0 + 2 * handshake_gate::first_record_timeout;
+	CHECK(not gate_poll(gate, t1)); // expire the flood
+	CHECK(gate.pending_count() == 0);
+	int ready = gate_connect(port);
+	send_record(ready, 8, 8);
+	std::vector<int> burst;
+	// Exactly fills the kernel queue (backlog + 1): more would block in connect
+	for (size_t i = 0; i < handshake_gate::max_pending; ++i)
+		burst.push_back(gate_connect(port));
+	auto got = gate_poll(gate, t1);
+	CHECK(got.has_value());
+	if (got)
+		CHECK(bytes_of(recv_one(*got)) == std::vector<uint8_t>(8, 0x42));
+	for (int fd: burst)
+		close(fd);
+	close(ready);
 
 	for (int fd: extra)
 		if (fd >= 0)

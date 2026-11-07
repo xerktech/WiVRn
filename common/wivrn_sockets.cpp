@@ -299,6 +299,31 @@ wivrn::handshake_gate::handshake_gate(int port) :
 
 std::optional<wivrn::TCP> wivrn::handshake_gate::poll(std::chrono::steady_clock::time_point now)
 {
+	// Returns the oldest pending connection whose first record is complete, dropping invalid and expired ones
+	auto take_ready = [&]() -> std::optional<TCP> {
+		for (auto it = pending.begin(); it != pending.end();)
+		{
+			switch (peek_first_record(it->socket.get_fd()))
+			{
+				case first_record::complete: {
+					TCP socket = std::move(it->socket);
+					pending.erase(it);
+					return socket;
+				}
+				case first_record::invalid:
+					it = pending.erase(it);
+					break;
+				case first_record::incomplete:
+					if (now >= it->deadline)
+						it = pending.erase(it);
+					else
+						++it;
+					break;
+			}
+		}
+		return std::nullopt;
+	};
+
 	while (true)
 	{
 		int fd = ::accept4(listener.get_fd(), nullptr, nullptr, SOCK_CLOEXEC);
@@ -310,41 +335,29 @@ std::optional<wivrn::TCP> wivrn::handshake_gate::poll(std::chrono::steady_clock:
 			break;
 		}
 
+		std::optional<TCP> ready;
+		if (pending.size() >= max_pending)
+		{
+			// Look before evicting: a burst of idle connects must not push out a peer that is ready
+			ready = take_ready();
+			if (pending.size() >= max_pending)
+				pending.pop_front(); // Everything pending is incomplete: drop the oldest
+		}
+
 		try
 		{
-			TCP socket{fd};
-			if (pending.size() >= max_pending)
-				pending.pop_front();
-			pending.push_back({std::move(socket), now + first_record_timeout});
+			pending.push_back({TCP{fd}, now + first_record_timeout});
 		}
 		catch (std::exception &)
 		{
 			// TCP closes the descriptor when its setup fails
 		}
+
+		if (ready)
+			return ready; // Anything else stays queued in the kernel until the next poll
 	}
 
-	for (auto it = pending.begin(); it != pending.end();)
-	{
-		switch (peek_first_record(it->socket.get_fd()))
-		{
-			case first_record::complete: {
-				TCP socket = std::move(it->socket);
-				pending.erase(it);
-				return socket;
-			}
-			case first_record::invalid:
-				it = pending.erase(it);
-				break;
-			case first_record::incomplete:
-				if (now >= it->deadline)
-					it = pending.erase(it);
-				else
-					++it;
-				break;
-		}
-	}
-
-	return std::nullopt;
+	return take_ready();
 }
 
 bool wivrn::UDP::is_replayed(uint64_t counter) const
