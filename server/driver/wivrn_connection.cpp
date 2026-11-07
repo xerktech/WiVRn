@@ -310,19 +310,21 @@ void wivrn::wivrn_connection::init(std::stop_token stop_token, std::function<voi
 	active = true;
 
 	if (state == encryption_state::pairing and not is_public_key_known)
-	{
 		wivrn::add_known_key({
 		        .public_key = clean_key(headset_key.public_key()),
 		        .name = crypto_handshake.name,
 		});
-		// The PIN pairs one headset. The server process (main.cpp) leaves pairing mode on success,
-		// but this object moves into the forked session, whose reconnects would otherwise still
-		// pair any headset that knows the old PIN.
+	else if (state != encryption_state::disabled)
+		wivrn::update_last_connection_timestamp(clean_key(headset_key.public_key()));
+
+	// Like the server process (main.cpp headset_connected_success), leave pairing mode after any
+	// successful connection, paired or not. This object moves into the forked session, whose
+	// reconnects would otherwise still pair any headset that knows the old PIN.
+	if (state == encryption_state::pairing)
+	{
 		state = encryption_state::enabled;
 		pin.clear();
 	}
-	else if (state != encryption_state::disabled)
-		wivrn::update_last_connection_timestamp(clean_key(headset_key.public_key()));
 }
 
 void wivrn::wivrn_connection::reset(std::stop_token stop, TCP && tcp, std::function<void()> tick)
