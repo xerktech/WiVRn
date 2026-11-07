@@ -96,6 +96,10 @@ wivrn::wivrn_connection::wivrn_connection(std::stop_token stop_token, encryption
 
 namespace
 {
+// Largest record accepted before the peer is authenticated: the PEM keys, the headset name and the
+// SMP messages of the PIN check are a few KiB
+constexpr size_t authenticate_max_payload = 64 * 1024;
+
 // Only one PIN check at a time, with a growing wait after each wrong one, for the whole server
 wivrn::pin_throttle pin_attempts;
 
@@ -108,9 +112,18 @@ class pin_attempt
 	bool correct = false;
 
 public:
-	pin_attempt()
+	// The headset waits 10s for pin_check_4 (client/wivrn_client.cpp): wait for the running
+	// check or the delay after a wrong PIN for less than that rather than refusing, so a user who
+	// mistyped once just retries. The wait counts as waiting for the peer, so the handshake pool
+	// can still cancel it to make room.
+	pin_attempt(std::stop_token stop, const std::function<void(bool)> & waiting)
 	{
-		if (not pin_attempts.try_begin())
+		if (waiting)
+			waiting(true);
+		bool ok = pin_attempts.begin(stop, std::chrono::seconds(8));
+		if (waiting)
+			waiting(false);
+		if (not ok)
 			throw std::runtime_error("PIN check refused: another check is running or a wrong PIN was entered recently");
 	}
 	pin_attempt(const pin_attempt &) = delete;
@@ -139,6 +152,9 @@ wivrn::authenticated_peer wivrn::wivrn_connection::authenticate_peer(std::stop_t
 wivrn::authenticated_peer wivrn::wivrn_connection::authenticate(std::stop_token stop_token, encryption_state state, const std::string & pin, TCP && tcp, const std::function<void(bool)> & waiting)
 {
 	typed_socket<TCP, from_headset::packets, to_headset::packets> control(std::move(tcp));
+	// Handshake packets are a few KiB. Up to handshake_pool::max_attempts peers authenticate at
+	// once, so do not let each one make the server allocate a full-size record buffer.
+	control.set_max_payload(authenticate_max_payload);
 
 	auto receive = [&](std::chrono::seconds timeout) {
 		auto timeout_abs = std::chrono::steady_clock::now() + timeout;
@@ -262,7 +278,7 @@ wivrn::authenticated_peer wivrn::wivrn_connection::authenticate(std::stop_token 
 					// Throttled from here, after the last wait on the peer: it learns whether its PIN
 					// matched only from pin_check_4, so a peer that stalls earlier learns nothing,
 					// holds no throttle and does not count as a wrong PIN
-					pin_attempt attempt;
+					pin_attempt attempt(stop_token, waiting);
 
 					auto [msg4, pin_match] = pin_check.step4(msg3);
 					control.send(to_headset::pin_check_4{msg4});
@@ -288,6 +304,7 @@ wivrn::authenticated_peer wivrn::wivrn_connection::authenticate(std::stop_token 
 	if (not std::holds_alternative<from_headset::crypto_handshake>(receive(10s)))
 		throw std::runtime_error("No handshake received from client");
 
+	control.set_max_payload(TCP::default_max_payload);
 	peer.control = std::move(control);
 	return peer;
 }

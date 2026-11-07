@@ -162,6 +162,8 @@ class TCP : public fd_base
 	// Record sequence numbers, mixed into the IV: a dropped, replayed or reordered record fails authentication
 	uint64_t recv_sequence = 0;
 	uint64_t send_sequence = 0;
+	// Largest record payload accepted; a larger length prefix is rejected before allocating
+	size_t max_payload = default_max_payload;
 
 	// Extract the next complete record from the received data, decrypting and authenticating it
 	deserialization_packet next_record();
@@ -169,6 +171,8 @@ class TCP : public fd_base
 	void seal(std::span<uint8_t> header, std::span<std::span<uint8_t>> payload, std::span<uint8_t, crypto::cipher_context::tag_length> tag);
 
 public:
+	static constexpr size_t default_max_payload = 16 * 1024 * 1024;
+
 	TCP() = default;
 	TCP(sockaddr_in6 address);
 	TCP(sockaddr_in address);
@@ -180,6 +184,13 @@ public:
 	size_t send_many_raw(std::span<serialization_packet> packets);
 
 	void set_aes_key_and_ivs(std::span<std::uint8_t, 16> key, std::span<std::uint8_t, 16> recv_iv, std::span<std::uint8_t, 16> send_iv);
+
+	// Lowers (or restores) the largest record accepted, e.g. while an unauthenticated peer can only
+	// send small handshake packets
+	void set_max_payload(size_t size)
+	{
+		max_payload = size;
+	}
 };
 
 using UnixDatagram = UDP;

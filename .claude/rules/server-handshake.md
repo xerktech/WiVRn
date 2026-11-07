@@ -25,6 +25,10 @@ paths:
 - Take the `pin_attempt` only after the last `receive` of the PIN exchange (pin_check_3).
   - Holding it across a peer wait let one stalled connection per 10 s block all pairing.
   - SMP leaks nothing about the PIN before pin_check_4, so earlier steps need no throttle.
+  - `pin_attempt` waits (under 8s, the headset's own wait for `pin_check_4`) instead of refusing;
+    it reports that wait through `waiting` so the pool can still evict it.
+- `authenticate` caps TCP records at 64 KiB and restores the default before handing the socket on:
+  a length prefix alone makes `TCP::receive_raw` allocate the whole record.
 
 ## Verifying without a full build
 - The full server needs Monado and many system packages; CI Build is the only full compile.

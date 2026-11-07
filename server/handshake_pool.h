@@ -23,6 +23,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstring>
 #include <exception>
 #include <functional>
@@ -57,6 +58,7 @@ public:
 
 private:
 	std::mutex mutex;
+	std::condition_variable_any changed;
 	bool busy = false;
 	clock::time_point next_allowed{};
 	std::chrono::milliseconds delay = initial_delay;
@@ -72,20 +74,53 @@ public:
 		return true;
 	}
 
-	// Ends the check started by try_begin, returns the wait before the next one
+	// Like try_begin, but waits up to max_wait for the running check to end or the wait after a
+	// wrong PIN to elapse, so a headset that just mistyped its PIN is not refused outright.
+	// False on timeout or stop.
+	bool begin(std::stop_token stop, clock::duration max_wait)
+	{
+		auto deadline = clock::now() + max_wait;
+		std::unique_lock lock(mutex);
+		while (true)
+		{
+			auto now = clock::now();
+			if (not busy and now >= next_allowed)
+			{
+				busy = true;
+				return true;
+			}
+			if (now >= deadline or stop.stop_requested())
+				return false;
+			// end() notifies when busy clears; the wait after a wrong PIN only needs the timeout.
+			// The stop_token overload only returns early once its predicate holds, hence not_busy.
+			if (busy)
+				changed.wait_until(lock, stop, deadline, [this] { return not busy; });
+			else
+				changed.wait_until(lock, stop, std::min(next_allowed, deadline), [] { return false; });
+		}
+	}
+
+	// Ends the check started by try_begin or begin, returns the wait before the next one
 	std::chrono::milliseconds end(bool correct, clock::time_point now = clock::now())
 	{
-		std::lock_guard lock(mutex);
-		busy = false;
-		if (correct)
+		std::chrono::milliseconds result{0};
 		{
-			delay = initial_delay;
-			next_allowed = now;
-			return std::chrono::milliseconds(0);
+			std::lock_guard lock(mutex);
+			busy = false;
+			if (correct)
+			{
+				delay = initial_delay;
+				next_allowed = now;
+			}
+			else
+			{
+				delay = std::min(2 * delay, max_delay);
+				next_allowed = now + delay;
+				result = delay;
+			}
 		}
-		delay = std::min(2 * delay, max_delay);
-		next_allowed = now + delay;
-		return delay;
+		changed.notify_all();
+		return result;
 	}
 };
 
