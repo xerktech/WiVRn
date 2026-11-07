@@ -129,7 +129,7 @@ void forked_children::start_application(const std::vector<std::string> & args, c
 			        display_child_status(status, "Application");
 			        const auto & watches = node.mapped();
 			        g_source_remove(watches.child);
-			        if (watches.kill)
+			        if (watches.kill and g_main_context_find_source_by_id(nullptr, watches.kill)) // gone once fired
 				        g_source_remove(watches.kill);
 
 			        if (self->state_changed_cb and self->children.empty() and not empty)
@@ -192,7 +192,7 @@ forked_children::~forked_children()
 	for (auto & [pid, watches]: children)
 	{
 		g_source_remove(watches.child);
-		if (watches.kill)
+		if (watches.kill and g_main_context_find_source_by_id(nullptr, watches.kill)) // gone once fired
 			g_source_remove(watches.kill);
 	}
 }

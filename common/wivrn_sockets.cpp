@@ -610,7 +610,6 @@ size_t wivrn::UDP::send_many_raw(std::span<serialization_packet> packets)
 
 // TCP records: uint32 payload length (in clear), payload, then a GCM tag when encrypted.
 // The length is authenticated as additional data.
-
 wivrn::deserialization_packet wivrn::TCP::next_record()
 {
 	if (data.size_bytes() < sizeof(uint32_t))

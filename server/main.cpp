@@ -437,8 +437,9 @@ void update_fsm()
 
 			g_timeout_add(delay_next_try.count(), [](void *) {
 				// A headset may have connected since this was scheduled: listening again would
-				// start a second connection_thread over the running one
-				if (server_watch != 0 or connection_thread or quitting_main_loop)
+				// start a second connection_thread over the running one. The application may still
+				// be stopping; its exit calls update_fsm again, which reschedules this.
+				if (server_watch != 0 or connection_thread or children->running() or quitting_main_loop)
 					return G_SOURCE_REMOVE;
 				start_listening();
 				start_publishing();
