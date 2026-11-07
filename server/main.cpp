@@ -437,9 +437,11 @@ void update_fsm()
 
 			g_timeout_add(delay_next_try.count(), [](void *) {
 				// A headset may have connected since this was scheduled: listening again would
-				// start a second connection_thread over the running one. The application may still
-				// be stopping; its exit calls update_fsm again, which reschedules this.
-				if (server_watch != 0 or connection_thread or children->running() or quitting_main_loop)
+				// start a second connection_thread over the running one.
+				// Not gated on children->running(): systemd_units_manager can report a stale running
+				// application (a failed job or an already dead unit never calls state_changed_cb),
+				// which would stop the server from ever listening again.
+				if (server_watch != 0 or connection_thread or quitting_main_loop)
 					return G_SOURCE_REMOVE;
 				start_listening();
 				start_publishing();
