@@ -58,7 +58,8 @@ if (WIVRN_BUILD_DASHBOARD OR WIVRN_BUILD_SERVER)
 
         if (WIVRN_BUILD_SERVER)
             add_executable(test-handshake-crypto test_handshake_crypto.cpp)
-            target_link_libraries(test-handshake-crypto wivrn-common)
+            # wivrn_packets.h needs the OpenXR headers, taken from Monado like the server
+            target_link_libraries(test-handshake-crypto wivrn-common xrt-external-openxr)
         endif()
     endif()
 endif()
