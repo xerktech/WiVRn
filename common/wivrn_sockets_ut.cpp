@@ -18,9 +18,11 @@
 // Loopback tests for the authenticated (AES-GCM) TCP and UDP records: round trips,
 // and that tampered, replayed, reordered or wrongly keyed records are rejected.
 #include "wivrn_sockets.h"
+#include <algorithm>
 #include <arpa/inet.h>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <netinet/in.h>
 #include <poll.h>
 #include <sys/socket.h>
@@ -406,10 +408,148 @@ static void test_udp()
 	CHECK(m.receive() == msg);
 }
 
+// handshake_gate: an idle or partial connection never blocks a peer that sends a full first record
+static int gate_connect(int port)
+{
+	int c = socket(AF_INET, SOCK_STREAM, 0);
+	sockaddr_in a{};
+	a.sin_family = AF_INET;
+	a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	a.sin_port = htons(port);
+	if (connect(c, (sockaddr *)&a, sizeof(a)) < 0)
+	{
+		close(c);
+		return -1;
+	}
+	return c;
+}
+
+static void send_record(int fd, uint32_t size, size_t sent_payload)
+{
+	std::vector<uint8_t> buf(sizeof(size) + sent_payload, 0x42);
+	memcpy(buf.data(), &size, sizeof(size));
+	CHECK(send(fd, buf.data(), buf.size(), 0) == ssize_t(buf.size()));
+}
+
+static std::optional<TCP> gate_poll(handshake_gate & gate, std::chrono::steady_clock::time_point now)
+{
+	// Give loopback a moment to deliver connects and data
+	std::this_thread::sleep_for(std::chrono::milliseconds(20));
+	return gate.poll(now);
+}
+
+static size_t open_fds()
+{
+	auto it = std::filesystem::directory_iterator("/proc/self/fd");
+	return std::distance(begin(it), end(it));
+}
+
+static void test_handshake_gate()
+{
+	handshake_gate gate(0);
+	sockaddr_in6 a{};
+	socklen_t len = sizeof(a);
+	getsockname(gate.get_fd(), (sockaddr *)&a, &len);
+	int port = ntohs(a.sin6_port);
+	auto t0 = std::chrono::steady_clock::now();
+
+	// An idle connection is held back, and does not stop a later complete one from getting through
+	int idle = gate_connect(port);
+	CHECK(idle >= 0);
+	CHECK(not gate_poll(gate, t0));
+	CHECK(gate.pending_count() == 1);
+
+	int partial = gate_connect(port);
+	send_record(partial, 100, 50); // header plus half the payload
+	CHECK(not gate_poll(gate, t0));
+	CHECK(gate.pending_count() == 2);
+
+	int good = gate_connect(port);
+	send_record(good, 100, 100);
+	auto handed = gate_poll(gate, t0);
+	CHECK(handed.has_value());
+	CHECK(gate.pending_count() == 2);
+	if (handed)
+	{
+		// The record is still unread, so the handshake sees it from the first byte
+		CHECK(bytes_of(recv_one(*handed)) == std::vector<uint8_t>(100, 0x42));
+	}
+
+	// Several more connects (more than the old backlog of 1) are all accepted at once
+	std::vector<int> extra;
+	for (int i = 0; i < 4; ++i)
+		extra.push_back(gate_connect(port));
+	CHECK(std::ranges::all_of(extra, [](int fd) { return fd >= 0; }));
+	CHECK(not gate_poll(gate, t0));
+	CHECK(gate.pending_count() == 6);
+
+	// Invalid sizes and closed peers are dropped at once
+	send_record(extra[0], 0, 0);
+	send_record(extra[1], handshake_gate::max_first_record + 1, 0);
+	close(extra[2]);
+	extra[2] = -1;
+	CHECK(not gate_poll(gate, t0));
+	CHECK(gate.pending_count() == 3);
+
+	// Past the deadline, idle and partial peers are dropped
+	CHECK(not gate_poll(gate, t0 + handshake_gate::first_record_timeout + std::chrono::milliseconds(1)));
+	CHECK(gate.pending_count() == 0);
+	char c;
+	CHECK(recv(idle, &c, 1, 0) == 0); // the server closed it
+
+	// When full, the oldest pending connection makes room for the newest
+	std::vector<int> flood;
+	for (size_t i = 0; i < handshake_gate::max_pending + 2; ++i)
+	{
+		flood.push_back(gate_connect(port));
+		gate_poll(gate, t0);
+	}
+	CHECK(gate.pending_count() == handshake_gate::max_pending);
+	// The two oldest were evicted (closed by the server), the newest was kept
+	CHECK(recv(flood[0], &c, 1, MSG_DONTWAIT) == 0);
+	CHECK(recv(flood[1], &c, 1, MSG_DONTWAIT) == 0);
+	CHECK(recv(flood[2], &c, 1, MSG_DONTWAIT) < 0 and errno == EAGAIN);
+	send_record(flood.back(), 8, 8);
+	CHECK(gate_poll(gate, t0).has_value());
+
+	// A burst of idle connects landing between two polls does not evict a peer that is ready
+	auto t1 = t0 + 2 * handshake_gate::first_record_timeout;
+	CHECK(not gate_poll(gate, t1)); // expire the flood
+	CHECK(gate.pending_count() == 0);
+	size_t fds_before = open_fds();
+	int ready = gate_connect(port);
+	send_record(ready, 8, 8);
+	std::vector<int> burst;
+	// Exactly fills the kernel queue (backlog + 1): more would block in connect
+	for (size_t i = 0; i < handshake_gate::max_pending; ++i)
+		burst.push_back(gate_connect(port));
+	auto got = gate_poll(gate, t1);
+	CHECK(got.has_value());
+	if (got)
+		CHECK(bytes_of(recv_one(*got)) == std::vector<uint8_t>(8, 0x42));
+	for (int fd: burst)
+		close(fd);
+	close(ready);
+	got.reset();
+	gate_poll(gate, t1 + 2 * handshake_gate::first_record_timeout); // drain and expire the burst
+	CHECK(gate.pending_count() == 0);
+	CHECK(open_fds() == fds_before); // no descriptor leaked on the full-gate handoff path
+
+	for (int fd: extra)
+		if (fd >= 0)
+			close(fd);
+	for (int fd: flood)
+		close(fd);
+	close(idle);
+	close(partial);
+	close(good);
+}
+
 int main()
 {
 	test_tcp();
 	test_udp();
+	test_handshake_gate();
 	printf(failures ? "FAILED: %d\n" : "ALL PASSED\n", failures);
 	return failures != 0;
 }

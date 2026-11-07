@@ -25,11 +25,14 @@
 #include <atomic>
 #include <bitset>
 #include <cassert>
+#include <chrono>
+#include <deque>
 #include <exception>
 #include <fcntl.h>
 #include <memory>
 #include <mutex>
 #include <netinet/ip.h>
+#include <optional>
 #include <span>
 #include <utility>
 #include <vector>
@@ -194,14 +197,53 @@ public:
 		sockaddr_in6 addr{};
 		socklen_t addrlen = sizeof(addr);
 
-		int fd2 = ::accept(fd, (sockaddr *)&addr, &addrlen);
-		fcntl(fd, F_SETFD, FD_CLOEXEC);
+		int fd2 = ::accept4(fd, (sockaddr *)&addr, &addrlen, SOCK_CLOEXEC);
 		if (fd2 < 0)
 			throw std::system_error{errno, std::generic_category()};
 
 		return {T{fd2}, addr};
 	}
 };
+// Accepts connections concurrently and releases one only once its first record has fully arrived.
+// The server runs a single handshake at a time, so without this an idle or trickling peer on the
+// LAN would hold the only slot until the handshake times out and keep the headset out.
+// A peer whose first record is not complete within first_record_timeout is dropped, and when
+// max_pending incomplete connections are waiting the oldest is dropped to make room.
+// Idle peers cost only a pending slot, so the timeout can stay long enough for TCP retransmits.
+class handshake_gate
+{
+	struct pending_connection
+	{
+		TCP socket;
+		std::chrono::steady_clock::time_point deadline;
+	};
+
+	TCPListener listener;
+	std::deque<pending_connection> pending;
+
+public:
+	static constexpr size_t max_pending = 16;
+	static constexpr std::chrono::milliseconds first_record_timeout = std::chrono::seconds(5);
+	// The first record is the small, unencrypted crypto handshake
+	static constexpr uint32_t max_first_record = 64 * 1024;
+
+	explicit handshake_gate(int port);
+
+	int get_fd() const
+	{
+		return listener.get_fd();
+	}
+
+	size_t pending_count() const
+	{
+		return pending.size();
+	}
+
+	// Never blocks: accepts every queued connection, drops expired or invalid ones and returns
+	// the oldest connection whose first record is complete, if any.
+	std::optional<TCP> poll(std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
+};
+
 template <typename Socket, typename ReceivedType, typename SentType>
 class typed_socket;
 
