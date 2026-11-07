@@ -207,6 +207,12 @@ void forked_children::stop()
 	for (auto & [pid, watches]: children)
 	{
 		kill(-pid, SIGTERM);
+
+		// Already stopping: overwriting the pending timer would leak it, and it would then signal
+		// the process group after it was reaped
+		if (watches.kill and g_main_context_find_source_by_id(nullptr, watches.kill))
+			continue;
+
 		intptr_t pid_ptr = pid;
 
 		// Send SIGKILL after 1s if it is still running

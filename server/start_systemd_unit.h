@@ -62,6 +62,10 @@ public:
 	void stop() override;
 
 private:
+	// Calls state_changed_cb if nothing is left running, for paths that drop a job or unit
+	// without an active-state change (failed job, unit already stopped)
+	void notify_if_stopped();
+
 	static void on_job_removed(
 	        systemdManagerProxy * proxy,
 	        guint32 id,

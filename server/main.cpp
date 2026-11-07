@@ -342,6 +342,7 @@ void kill_server()
 	server_kill_watch = g_timeout_add(3500, [](void *) {
 		assert(server_pid > 0);
 		kill(-server_pid, SIGTERM);
+		server_kill_watch = 0; // removed by returning G_SOURCE_REMOVE
 		return G_SOURCE_REMOVE; }, 0);
 }
 
@@ -438,9 +439,8 @@ void update_fsm()
 			g_timeout_add(delay_next_try.count(), [](void *) {
 				// A headset may have connected since this was scheduled: listening again would
 				// start a second connection_thread over the running one.
-				// Not gated on children->running(): systemd_units_manager can report a stale running
-				// application (a failed job or an already dead unit never calls state_changed_cb),
-				// which would stop the server from ever listening again.
+				// Not gated on children->running(): the application may take a while to stop (up to
+				// systemd's stop timeout), and a headset should not wait for it to reconnect.
 				if (server_watch != 0 or connection_thread or quitting_main_loop)
 					return G_SOURCE_REMOVE;
 				start_listening();
@@ -503,8 +503,13 @@ gboolean headset_connected_failed(void *)
 
 gboolean headset_connected(gpointer user_data)
 {
+	// Listening starts before the D-Bus name is acquired: connections wait in the gate until
+	// on_name_acquired has created children and dbus_server, which a connected headset needs
+	if (not children or not dbus_server)
+		return G_SOURCE_CONTINUE;
+
 	assert(server_watch == 0);
-	assert(not children->running());
+	// The previous application may still be stopping (see update_fsm): it is not waited for
 	assert(not connection_thread);
 	assert(listener);
 
