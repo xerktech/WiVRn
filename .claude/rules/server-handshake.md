@@ -22,7 +22,7 @@ paths:
   - A person typing the PIN (up to 2 min) is the longest waiter, so 16 stalled LAN peers that keep
     reconnecting can stop pairing; paired headsets (~0.15 s) are unaffected. Accepted as LAN risk.
   - Evicting the newest staller failed QA: a person who joins a pool already full of stallers is
-    the newest, so one connection ~110 ms later evicts them; reconnect-every-1 s stallers won too.
+    then the newest, so it made pairing easier to block than the current rule.
   - Exempting PIN waiters can't work either: attackers reach the PIN step too.
 - Keep the `handshake_gate` open until a handshake fully succeeds; closing it drops every peer
   queued in it, including a headset that already sent its handshake.
