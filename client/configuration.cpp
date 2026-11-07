@@ -24,6 +24,8 @@
 #include "wivrn_packets.h"
 
 #include <algorithm>
+#include <chrono>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <magic_enum.hpp>
@@ -335,6 +337,23 @@ configuration::configuration(xr::system & system, xr::session & session, const s
 	catch (std::exception & e)
 	{
 		spdlog::warn("Cannot read configuration: {}", e.what());
+
+		// The next save() rewrites the config from defaults, which would destroy
+		// the user's servers and settings: move the unreadable file aside first.
+		std::error_code ec;
+		if (std::filesystem::exists(config_path, ec))
+		{
+			auto seconds = std::chrono::duration_cast<std::chrono::seconds>(
+			                       std::chrono::system_clock::now().time_since_epoch())
+			                       .count();
+			auto backup = config_path;
+			backup += ".bad-" + std::to_string(seconds);
+			std::filesystem::rename(config_path, backup, ec);
+			if (ec)
+				spdlog::warn("Cannot move unreadable configuration to {}: {}", backup.native(), ec.message());
+			else
+				spdlog::warn("Moved unreadable configuration to {}", backup.native());
+		}
 	}
 }
 
