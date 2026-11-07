@@ -34,6 +34,7 @@
 #include "driver/configuration.h"
 #include "driver/wivrn_connection.h"
 #include "exit_codes.h"
+#include "handshake_pool.h"
 #include "ipc_server_cb.h"
 #include "protocol_version.h"
 #include "start_application.h"
@@ -84,6 +85,8 @@ using namespace wivrn;
 using namespace std::chrono_literals;
 
 static std::unique_ptr<handshake_gate> listener;
+// Handshakes authenticating concurrently while listening, see handshake_pool
+static std::optional<handshake_pool<authenticated_peer>> handshakes;
 std::optional<wivrn::typed_socket<wivrn::UnixDatagram, from_monado::packets, to_monado::packets>> wivrn_ipc_socket_main_loop;
 std::optional<wivrn::typed_socket<wivrn::UnixDatagram, to_monado::packets, from_monado::packets>> wivrn_ipc_socket_monado;
 
@@ -235,9 +238,10 @@ guint pairing_timeout;
 std::string pin;
 NotifyNotification * pin_notification;
 
-// Delay until the next connection is allowed, increased after each incorrect attempt
-const std::chrono::milliseconds default_delay_next_try = 10ms;
-std::chrono::milliseconds delay_next_try = default_delay_next_try;
+// Delay before listening again after a session or a failed handshake.
+// Wrong PINs are throttled in the handshake itself (pin_throttle), not here, so they do not delay
+// headsets that are already paired.
+const std::chrono::milliseconds delay_next_try = 10ms;
 
 WivrnServer * dbus_server;
 
@@ -343,25 +347,32 @@ void kill_server()
 
 void start_listening()
 {
-	if (listener)
+	if (listener_watch)
 		return;
 
-	assert(listener_watch == 0);
-
-	listener = std::make_unique<handshake_gate>(configuration().port);
+	// The gate may still be open from a handshake that failed, with other peers queued in it
+	if (not listener)
+		listener = std::make_unique<handshake_gate>(configuration().port);
+	handshakes.emplace();
 	// Polled rather than watched: a connection is only handed over once its first record has arrived
 	listener_watch = g_timeout_add(50, &headset_connected, nullptr);
 }
 
+// Stops handing over connections, but keeps the gate open so that peers already queued are not
+// dropped if the handshake in progress fails
+void pause_listening()
+{
+	if (listener_watch)
+	{
+		g_source_remove(listener_watch);
+		listener_watch = 0;
+	}
+	handshakes.reset();
+}
+
 void stop_listening()
 {
-	if (!listener)
-		return;
-
-	assert(listener_watch != 0);
-
-	g_source_remove(listener_watch);
-	listener_watch = 0;
+	pause_listening();
 	listener.reset();
 }
 
@@ -454,6 +465,9 @@ gboolean headset_connected_success(void *)
 
 	std::cerr << "Client connected" << std::endl;
 
+	// The session listens on the port itself when the headset reconnects
+	stop_listening();
+
 	expose_known_keys_on_dbus();
 
 	configuration c;
@@ -466,8 +480,6 @@ gboolean headset_connected_success(void *)
 	{
 		std::cerr << "Failed to start application: " << e.what() << std::endl;
 	}
-
-	delay_next_try = default_delay_next_try;
 
 	connection.reset();
 	return G_SOURCE_REMOVE;
@@ -482,18 +494,6 @@ gboolean headset_connected_failed(void *)
 	return G_SOURCE_REMOVE;
 }
 
-gboolean headset_connected_incorrect_pin(void *)
-{
-	assert(connection_thread);
-	connection_thread.reset();
-
-	delay_next_try = 2 * delay_next_try;
-	std::cerr << "Waiting " << delay_next_try << " until the next attempt is allowed" << std::endl;
-
-	update_fsm();
-	return G_SOURCE_REMOVE;
-}
-
 gboolean headset_connected(gpointer user_data)
 {
 	assert(server_watch == 0);
@@ -501,23 +501,32 @@ gboolean headset_connected(gpointer user_data)
 	assert(not connection_thread);
 	assert(listener);
 
-	std::optional<TCP> tcp = listener->poll();
-	if (not tcp)
+	assert(handshakes);
+
+	while (not handshakes->full())
+	{
+		std::optional<TCP> tcp = listener->poll();
+		if (not tcp)
+			break;
+
+		handshakes->start(std::move(*tcp), [state = enc_state, pin = pin](std::stop_token stop, TCP && tcp) {
+			return wivrn_connection::authenticate(stop, state, pin, std::move(tcp));
+		});
+	}
+
+	std::optional<authenticated_peer> peer = handshakes->take();
+	if (not peer)
 		return G_SOURCE_CONTINUE;
 
-	stop_listening();
+	// Cancels the other handshakes
+	pause_listening();
 	stop_publishing();
 
-	connection_thread.emplace([](std::stop_token stop_token, TCP && tcp, std::string pin, wivrn_connection::encryption_state enc_state) {
+	connection_thread.emplace([](std::stop_token stop_token, authenticated_peer && peer, std::string pin, wivrn_connection::encryption_state enc_state) {
 		try
 		{
-			connection = std::make_unique<wivrn_connection>(stop_token, enc_state, pin, std::move(tcp));
+			connection = std::make_unique<wivrn_connection>(stop_token, enc_state, pin, std::move(peer));
 			g_main_context_invoke(nullptr, &headset_connected_success, nullptr);
-		}
-		catch (wivrn::incorrect_pin &)
-		{
-			std::cerr << "Incorrect PIN" << std::endl;
-			g_main_context_invoke(nullptr, &headset_connected_incorrect_pin, nullptr);
 		}
 		catch (std::exception & e)
 		{
@@ -525,7 +534,7 @@ gboolean headset_connected(gpointer user_data)
 			g_main_context_invoke(nullptr, &headset_connected_failed, nullptr);
 		}
 	},
-	                          std::move(*tcp),
+	                          std::move(*peer),
 	                          pin,
 	                          enc_state);
 
@@ -636,6 +645,10 @@ void set_encryption_state(wivrn_connection::encryption_state new_enc_state)
 
 	enc_state = new_enc_state;
 	wivrn_server_set_pin(dbus_server, pin.c_str());
+
+	// Handshakes in progress were started with the previous PIN and pairing state
+	if (handshakes)
+		handshakes->clear();
 }
 
 gboolean on_handle_disconnect(WivrnServer * skeleton,

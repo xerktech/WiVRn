@@ -24,17 +24,24 @@
 
 #include "driver/configuration.h"
 #include "driver/wivrn_session.h"
+#include "handshake_pool.h"
 #include "wivrn_ipc.h"
 #include "wivrn_sockets.h"
 
 #include <sys/poll.h>
 
-std::unique_ptr<wivrn::TCP> wivrn::accept_connection(wivrn_session & cnx, std::stop_token stop, std::function<void(wivrn_session &)> tick)
+std::optional<wivrn::authenticated_peer> wivrn::accept_connection(
+        wivrn_session & cnx,
+        std::stop_token stop,
+        handshake_gate & listener,
+        std::function<authenticated_peer(std::stop_token, TCP &&)> authenticate,
+        std::function<void(wivrn_session &)> tick)
 {
 	wivrn_ipc_socket_monado->send(from_monado::headset_disconnected{});
 
-	// Only a connection whose first record has arrived is returned, so an idle peer cannot block the headset
-	wivrn::handshake_gate listener(configuration().port);
+	// Peers whose first record has arrived authenticate concurrently, so a stalled or hostile one
+	// cannot keep the headset out
+	handshake_pool<authenticated_peer> handshakes;
 
 	// The listener is not polled: when accept fails (e.g. out of descriptors) it stays readable and
 	// would spin this loop; the gate is checked every 50ms instead, like in the main loop.
@@ -51,10 +58,18 @@ std::unique_ptr<wivrn::TCP> wivrn::accept_connection(wivrn_session & cnx, std::s
 			return {};
 		}
 
-		if (auto tcp = listener.poll())
+		while (not handshakes.full())
+		{
+			auto tcp = listener.poll();
+			if (not tcp)
+				break;
+			handshakes.start(std::move(*tcp), authenticate);
+		}
+
+		if (auto peer = handshakes.take())
 		{
 			wivrn_ipc_socket_monado->send(from_monado::headset_connected{});
-			return std::make_unique<wivrn::TCP>(std::move(*tcp));
+			return peer;
 		}
 
 		if (fds[1].revents & POLLIN)

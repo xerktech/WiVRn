@@ -19,13 +19,23 @@
 
 #pragma once
 
+#include "driver/wivrn_connection.h"
+
 #include <functional>
-#include <memory>
+#include <optional>
 #include <stop_token>
 
 namespace wivrn
 {
-class TCP;
+class handshake_gate;
 class wivrn_session;
-std::unique_ptr<wivrn::TCP> accept_connection(wivrn_session & cnx, std::stop_token stop, std::function<void(wivrn_session &)> tick = {});
+// Waits for a headset to authenticate on gate. The gate is owned by the caller so it outlives a
+// handshake that fails later: other peers queued in it are not dropped.
+// Returns nothing when stopped.
+std::optional<authenticated_peer> accept_connection(
+        wivrn_session & cnx,
+        std::stop_token stop,
+        handshake_gate & gate,
+        std::function<authenticated_peer(std::stop_token, TCP &&)> authenticate,
+        std::function<void(wivrn_session &)> tick = {});
 } // namespace wivrn

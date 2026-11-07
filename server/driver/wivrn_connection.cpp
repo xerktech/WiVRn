@@ -20,6 +20,7 @@
 #include "wivrn_connection.h"
 #include "configuration.h"
 #include "handshake_identity.h"
+#include "handshake_pool.h"
 #include "protocol_version.h"
 #include "secrets.h"
 #include "smp.h"
@@ -28,6 +29,8 @@
 #include <algorithm>
 #include <arpa/inet.h>
 #include <chrono>
+#include <iostream>
+#include <mutex>
 #include <poll.h>
 #include <regex>
 #include <sys/socket.h>
@@ -57,18 +60,205 @@ static std::string clean_key(std::string key)
 wivrn::incorrect_pin::incorrect_pin() :
         std::runtime_error("Incorrect PIN") {}
 
-wivrn::wivrn_connection::wivrn_connection(std::stop_token stop_token, encryption_state state, std::string pin, TCP && tcp) :
-        control(std::move(tcp)),
+wivrn::wivrn_connection::wivrn_connection(std::stop_token stop_token, encryption_state state, std::string pin, authenticated_peer && peer) :
         stream(-1),
         pin(pin),
         state(state)
 {
-	init(stop_token);
+	init(stop_token, std::move(peer));
 }
 
-void wivrn::wivrn_connection::init(std::stop_token stop_token, std::function<void()> tick)
+namespace
+{
+// Only one PIN check at a time, with a growing wait after each wrong one, for the whole server
+wivrn::pin_throttle pin_attempts;
+
+// The identity key file is created on first use: serialize so concurrent handshakes cannot each
+// create (and send) a different key
+std::mutex identity_key_mutex;
+
+class pin_attempt
+{
+	bool correct = false;
+
+public:
+	pin_attempt()
+	{
+		if (not pin_attempts.try_begin())
+			throw std::runtime_error("PIN check refused: another check is running or a wrong PIN was entered recently");
+	}
+	pin_attempt(const pin_attempt &) = delete;
+	pin_attempt & operator=(const pin_attempt &) = delete;
+
+	void set_correct()
+	{
+		correct = true;
+	}
+
+	// An abandoned check counts as wrong: it may have been a guess
+	~pin_attempt()
+	{
+		auto delay = pin_attempts.end(correct);
+		if (not correct)
+			std::cerr << "Next PIN check allowed in " << delay << std::endl;
+	}
+};
+} // namespace
+
+wivrn::authenticated_peer wivrn::wivrn_connection::authenticate_peer(std::stop_token stop_token, TCP && tcp) const
+{
+	return authenticate(stop_token, state, pin, std::move(tcp));
+}
+
+wivrn::authenticated_peer wivrn::wivrn_connection::authenticate(std::stop_token stop_token, encryption_state state, const std::string & pin, TCP && tcp)
+{
+	typed_socket<TCP, from_headset::packets, to_headset::packets> control(std::move(tcp));
+
+	auto receive = [&](std::chrono::seconds timeout) {
+		auto timeout_abs = std::chrono::steady_clock::now() + timeout;
+
+		while (true)
+		{
+			// Data may already be buffered from an earlier read
+			if (auto packet = control.receive_pending())
+				return std::move(*packet);
+
+			if (stop_token.stop_requested())
+				throw std::runtime_error("Connection cancelled");
+
+			pollfd fds{.fd = control.get_fd(), .events = POLLIN};
+			// Wake up at least every 100ms to check for cancellation
+			if (::poll(&fds, 1, 100) < 0)
+				throw std::system_error(errno, std::system_category());
+
+			if (fds.revents & (POLLHUP | POLLERR))
+				throw std::runtime_error("Error on control socket");
+
+			if (fds.revents & POLLIN)
+			{
+				if (auto packet = control.receive())
+					return std::move(*packet);
+			}
+
+			if (std::chrono::steady_clock::now() > timeout_abs)
+				throw std::runtime_error("No handshake received from client");
+		}
+	};
+
+	// Wait for client to send handshake packet
+	auto crypto_handshake = std::get<from_headset::crypto_handshake>(receive(10s));
+
+	if (crypto_handshake.protocol_version != wivrn::protocol_version)
+	{
+		control.send(to_headset::crypto_handshake{
+		        .state = to_headset::crypto_handshake::crypto_state::incompatible_version,
+		});
+		throw std::runtime_error("Incompatible protocol version");
+	}
+
+	crypto::key headset_key = crypto::key::from_public_key(crypto_handshake.public_key);
+	bool is_public_key_known = std::ranges::any_of(
+	        wivrn::known_keys(),
+	        [key = clean_key(crypto_handshake.public_key)](const wivrn::headset_key & k) {
+		        return k.public_key == key;
+	        });
+
+	authenticated_peer peer{
+	        .add_key = state == encryption_state::pairing and not is_public_key_known,
+	        .public_key = clean_key(headset_key.public_key()),
+	        .name = crypto_handshake.name,
+	};
+
+	switch (state)
+	{
+		case encryption_state::disabled:
+			// Encryption and authentication are disabled
+			control.send(to_headset::crypto_handshake{
+			        .state = to_headset::crypto_handshake::crypto_state::encryption_disabled,
+			});
+			break;
+
+		case encryption_state::enabled:
+			if (not is_public_key_known)
+			{
+				control.send(to_headset::crypto_handshake{
+				        .state = to_headset::crypto_handshake::crypto_state::pairing_disabled,
+				});
+				throw std::runtime_error("Client not known and pairing is disabled");
+			}
+
+			[[fallthrough]];
+
+		case encryption_state::pairing:
+			// Generate an ephemeral key pair just for exchanging the AES key
+			crypto::key server_key = crypto::key::generate_x448_keypair();
+			// Long-term key the headset pins at pairing, so it can tell this server from an impostor
+			crypto::key identity_key = [&] {
+				std::lock_guard lock(identity_key_mutex);
+				return wivrn::identity_key_or_notify(
+				        wivrn::server_identity_key,
+				        [&](auto && packet) { control.send(std::forward<decltype(packet)>(packet)); });
+			}();
+
+			control.send(to_headset::crypto_handshake{
+			        .public_key = server_key.public_key(),
+			        .state = is_public_key_known
+			                         ? to_headset::crypto_handshake::crypto_state::client_already_paired
+			                         : to_headset::crypto_handshake::crypto_state::pin_needed,
+			        .identity_key = identity_key.public_key(),
+			});
+
+			if (not is_public_key_known)
+			{
+				try
+				{
+					// Check the PIN. The wait is long because the user types the PIN now; it
+					// holds no shared slot, other headsets keep connecting meanwhile.
+					crypto::smp pin_check;
+
+					auto msg1 = std::get<from_headset::pin_check_1>(receive(2min)).message;
+
+					// Throttled from here: the peer learns whether its PIN matched from pin_check_4
+					pin_attempt attempt;
+
+					auto msg2 = pin_check.step2(msg1, pin_check_secret(pin, identity_key, headset_key));
+					control.send(to_headset::pin_check_2{msg2});
+
+					auto msg3 = std::get<from_headset::pin_check_3>(receive(10s)).message;
+
+					auto [msg4, pin_match] = pin_check.step4(msg3);
+					control.send(to_headset::pin_check_4{msg4});
+
+					if (not pin_match)
+						throw incorrect_pin{};
+
+					attempt.set_correct();
+				}
+				catch (crypto::smp_cheated &)
+				{
+					throw std::runtime_error("Unable to check PIN");
+				}
+			}
+
+			peer.keys = secrets::server(server_key, identity_key, headset_key, is_public_key_known ? "000000" : pin);
+			control.set_aes_key_and_ivs(peer.keys->control_key, peer.keys->control_iv_from_headset, peer.keys->control_iv_to_headset);
+			break;
+	}
+
+	// Wait for confirmation that the client has set up encryption: only a peer holding the paired
+	// key (or the PIN) can send it, so the handshake is authenticated from here on
+	if (not std::holds_alternative<from_headset::crypto_handshake>(receive(10s)))
+		throw std::runtime_error("No handshake received from client");
+
+	peer.control = std::move(control);
+	return peer;
+}
+
+void wivrn::wivrn_connection::init(std::stop_token stop_token, authenticated_peer && peer, std::function<void()> tick)
 {
 	active = false;
+
+	control = std::move(peer.control);
 
 	sockaddr_in6 server_address;
 	socklen_t len = sizeof(server_address);
@@ -93,6 +283,8 @@ void wivrn::wivrn_connection::init(std::stop_token stop_token, std::function<voi
 	{
 		stream = decltype(stream)();
 		stream.bind(server_address);
+		if (peer.keys)
+			stream.set_aes_key_and_ivs(peer.keys->stream_key, peer.keys->stream_iv_header_from_headset, peer.keys->stream_iv_header_to_headset);
 	}
 
 	auto receive = [&](std::optional<std::chrono::seconds> timeout = std::nullopt, bool allow_stream_socket = false) {
@@ -164,97 +356,6 @@ void wivrn::wivrn_connection::init(std::stop_token stop_token, std::function<voi
 		}
 	};
 
-	// Wait for client to send handshake packet
-	auto crypto_handshake = std::get<from_headset::crypto_handshake>(receive(10s).first);
-
-	if (crypto_handshake.protocol_version != wivrn::protocol_version)
-	{
-		control.send(to_headset::crypto_handshake{
-		        .state = to_headset::crypto_handshake::crypto_state::incompatible_version,
-		});
-		throw std::runtime_error("Incompatible protocol version");
-	}
-
-	crypto::key headset_key = crypto::key::from_public_key(crypto_handshake.public_key);
-	bool is_public_key_known = std::ranges::any_of(
-	        wivrn::known_keys(),
-	        [key = clean_key(crypto_handshake.public_key)](const wivrn::headset_key & k) {
-		        return k.public_key == key;
-	        });
-
-	switch (state)
-	{
-		case encryption_state::disabled:
-			// Encryption and authentication are disabled
-			control.send(to_headset::crypto_handshake{
-			        .state = to_headset::crypto_handshake::crypto_state::encryption_disabled,
-			});
-			break;
-
-		case encryption_state::enabled:
-			if (not is_public_key_known)
-			{
-				control.send(to_headset::crypto_handshake{
-				        .state = to_headset::crypto_handshake::crypto_state::pairing_disabled,
-				});
-				throw std::runtime_error("Client not known and pairing is disabled");
-			}
-
-			[[fallthrough]];
-
-		case encryption_state::pairing:
-			// Generate an ephemeral key pair just for exchanging the AES key
-			crypto::key server_key = crypto::key::generate_x448_keypair();
-			// Long-term key the headset pins at pairing, so it can tell this server from an impostor
-			crypto::key identity_key = wivrn::identity_key_or_notify(
-			        wivrn::server_identity_key,
-			        [&](auto && packet) { control.send(std::forward<decltype(packet)>(packet)); });
-
-			control.send(to_headset::crypto_handshake{
-			        .public_key = server_key.public_key(),
-			        .state = is_public_key_known
-			                         ? to_headset::crypto_handshake::crypto_state::client_already_paired
-			                         : to_headset::crypto_handshake::crypto_state::pin_needed,
-			        .identity_key = identity_key.public_key(),
-			});
-
-			if (not is_public_key_known)
-			{
-				try
-				{
-					// Check the PIN
-					crypto::smp pin_check;
-
-					auto msg1 = std::get<from_headset::pin_check_1>(receive(2min).first).message;
-
-					auto msg2 = pin_check.step2(msg1, pin_check_secret(pin, identity_key, headset_key));
-					control.send(to_headset::pin_check_2{msg2});
-
-					auto msg3 = std::get<from_headset::pin_check_3>(receive(10s).first).message;
-
-					auto [msg4, pin_match] = pin_check.step4(msg3);
-					control.send(to_headset::pin_check_4{msg4});
-
-					if (not pin_match)
-						throw incorrect_pin{};
-				}
-				catch (crypto::smp_cheated &)
-				{
-					throw std::runtime_error("Unable to check PIN");
-				}
-			}
-
-			auto s = secrets::server(server_key, identity_key, headset_key, is_public_key_known ? "000000" : pin);
-			control.set_aes_key_and_ivs(s.control_key, s.control_iv_from_headset, s.control_iv_to_headset);
-			stream.set_aes_key_and_ivs(s.stream_key, s.stream_iv_header_from_headset, s.stream_iv_header_to_headset);
-			break;
-	}
-
-	// Wait for confirmation that the client has set up encryption
-	// Bounded wait: a client that stops here would otherwise hold the server's only handshake slot
-	if (not std::holds_alternative<from_headset::crypto_handshake>(receive(10s).first))
-		throw std::runtime_error("No handshake received from client");
-
 	control.send(to_headset::handshake{.stream_port = port});
 
 	auto [stream_handshake, client_port] = receive(10s, true);
@@ -283,22 +384,21 @@ void wivrn::wivrn_connection::init(std::stop_token stop_token, std::function<voi
 
 	active = true;
 
-	if (state == encryption_state::pairing and not is_public_key_known)
+	if (peer.add_key)
 		wivrn::add_known_key({
-		        .public_key = clean_key(headset_key.public_key()),
-		        .name = crypto_handshake.name,
+		        .public_key = peer.public_key,
+		        .name = peer.name,
 		});
-	else if (state != encryption_state::disabled)
-		wivrn::update_last_connection_timestamp(clean_key(headset_key.public_key()));
+	else if (peer.keys)
+		wivrn::update_last_connection_timestamp(peer.public_key);
 }
 
-void wivrn::wivrn_connection::reset(std::stop_token stop, TCP && tcp, std::function<void()> tick)
+void wivrn::wivrn_connection::reset(std::stop_token stop, authenticated_peer && peer, std::function<void()> tick)
 {
 	if (stream)
 		stream = decltype(stream)();
 
-	control = std::move(tcp);
-	init(stop, tick);
+	init(stop, std::move(peer), tick);
 }
 
 void wivrn::wivrn_connection::shutdown()
