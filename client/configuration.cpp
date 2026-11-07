@@ -118,7 +118,24 @@ std::optional<T> read_value(simdjson::simdjson_result<simdjson::dom::element> va
 	else // floating point
 	{
 		if (val.is_double())
-			return (T)val.get_double();
+		{
+			// Reject values a float cannot hold (e.g. 1e300) instead of narrowing them to inf.
+			// The client builds with -ffast-math, which lets the compiler assume no inf/NaN
+			// exist, so later clamps or isfinite() checks on the narrowed value are not
+			// reliable. JSON numbers always parse to a finite double, so this comparison on
+			// the double itself is safe under fast-math.
+			double d = val.get_double();
+			if constexpr (std::is_same_v<T, float>)
+			{
+				// FLT_MAX + half an ulp: the smallest magnitude that rounds to inf. Anything
+				// below it rounds to at most FLT_MAX, e.g. 3.40282347e38 as printed by
+				// 9-digit float formatters.
+				constexpr double float_overflow = 0x1.ffffffp127;
+				if (not(d > -float_overflow and d < float_overflow))
+					return std::nullopt;
+			}
+			return (T)d;
+		}
 		if (val.is_int64())
 			return (T)val.get_int64();
 		if (val.is_uint64())
