@@ -73,6 +73,14 @@ public:
 	float preferred_refresh_rate = 0;
 	std::optional<float> minimum_refresh_rate;
 	float resolution_scale = 1.2;
+	// widest range the settings slider offers (extended config); a loaded value is clamped
+	// to it, since the per-eye size is resolution_scale times the recommended size and is
+	// stored in a uint16_t, so a huge or negative scale is an out-of-range conversion
+	static constexpr float resolution_scale_min = 0.5;
+	static constexpr float resolution_scale_max = 3.5;
+	// range the foveation slider offers (0-80 %, stream_scale = 1 - v / 100)
+	static constexpr float stream_scale_min = 0.2;
+	static constexpr float stream_scale_max = 1.0;
 	std::optional<wivrn::video_codec> codec;
 	uint32_t bitrate_bps = 50'000'000;
 	uint8_t bit_depth = 10;

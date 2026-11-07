@@ -289,6 +289,11 @@ configuration::configuration(xr::system & system, xr::session & session, const s
 		// a hand-edited or corrupted config must not size the UI outside the slider's range
 		theme_font_scale = std::clamp(theme_font_scale, theme_font_scale_min, theme_font_scale_max);
 
+		// likewise for the render and stream sizes, which are converted to uint16_t pixel counts
+		resolution_scale = std::clamp(resolution_scale, resolution_scale_min, resolution_scale_max);
+		if (stream_scale)
+			stream_scale = std::clamp(*stream_scale, stream_scale_min, stream_scale_max);
+
 		// refresh rate must be supported by this headset, otherwise fall back to the default
 		const auto & rates = session.get_refresh_rates();
 		if (preferred_refresh_rate != 0 and not utils::contains(rates, preferred_refresh_rate))
