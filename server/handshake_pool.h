@@ -89,16 +89,21 @@ public:
 // Runs the authenticating part of several handshakes at once, each on its own thread, so a peer
 // that stalls (waiting for a PIN, sending a junk first record) cannot keep the headset out.
 // A peer gets at most one attempt: a new connection from the same address cancels its previous
-// one, so a headset that reconnects replaces its own stale attempt. When the pool is full, the
-// oldest unfinished attempt is cancelled to make room, so peers using many addresses cannot keep a
-// new one out either: a headset authenticates in well under a second, a stalled peer never does.
+// one, so a headset that reconnects replaces its own stale attempt.
+// When the pool is full, the oldest attempt that has been running for at least min_age is
+// cancelled to make room: a paired headset authenticates in about 100ms and a junk record fails
+// within milliseconds, so only a stalled peer gets that old. While nothing is that old, has_room()
+// is false and new connections wait in the gate instead; a burst of fresh connections can thus
+// never cancel a headset that is partway through its handshake.
 // Tests: test_handshake_pool in server/handshake_pool_ut.cpp.
 template <typename Result>
 class handshake_pool
 {
 public:
 	using handshake = std::function<Result(std::stop_token, TCP &&)>;
+	using clock = std::chrono::steady_clock;
 	static constexpr size_t max_attempts = handshake_gate::max_pending;
+	static constexpr std::chrono::milliseconds min_age = std::chrono::seconds(2);
 
 private:
 	struct outcome
@@ -110,6 +115,7 @@ private:
 	struct attempt
 	{
 		in6_addr peer;
+		clock::time_point started;
 		std::shared_ptr<outcome> state;
 		std::jthread thread;
 	};
@@ -122,11 +128,23 @@ private:
 		return std::memcmp(&a, &b, sizeof(a)) == 0;
 	}
 
-	void reap_stale()
+	static bool finished(const attempt & a)
 	{
-		// A cancelled thread notices within one poll interval; only finished ones are joined (on
-		// erase), so this never blocks the caller
-		std::erase_if(stale, [](const attempt & a) { return a.state->done.load(std::memory_order_acquire); });
+		return a.state->done.load(std::memory_order_acquire);
+	}
+
+	// Joins finished threads (on erase) and drops failed attempts; never blocks the caller.
+	// A cancelled thread notices within one poll interval.
+	void reap()
+	{
+		std::erase_if(stale, finished);
+		std::erase_if(attempts, [](const attempt & a) { return finished(a) and not a.state->result; });
+	}
+
+	// The attempt to cancel to make room: the oldest one still running since before now - min_age
+	std::list<attempt>::iterator evictable(clock::time_point now)
+	{
+		return std::ranges::find_if(attempts, [&](const attempt & a) { return not finished(a) and now - a.started >= min_age; });
 	}
 
 public:
@@ -143,9 +161,17 @@ public:
 		return attempts.size();
 	}
 
-	// Starts a handshake on tcp, cancelling any attempt still running for the same peer address,
-	// and the oldest unfinished one if the pool is full
-	void start(TCP && tcp, handshake fn)
+	// Whether start() can take another connection now; if not, leave it queued in the gate
+	bool has_room(clock::time_point now = clock::now())
+	{
+		reap();
+		return attempts.size() < max_attempts or evictable(now) != attempts.end();
+	}
+
+	// Starts a handshake on tcp, cancelling any attempt still running for the same peer address.
+	// When the pool is full, cancels the oldest stalled attempt, or drops tcp if none is: callers
+	// check has_room() first.
+	void start(TCP && tcp, handshake fn, clock::time_point now = clock::now())
 	{
 		sockaddr_in6 addr{};
 		socklen_t len = sizeof(addr);
@@ -165,11 +191,12 @@ public:
 				++it;
 		}
 
+		reap();
 		if (attempts.size() >= max_attempts)
 		{
-			auto oldest = std::ranges::find_if(attempts, [](const attempt & a) { return not a.state->done.load(std::memory_order_acquire); });
+			auto oldest = evictable(now);
 			if (oldest == attempts.end())
-				oldest = attempts.begin(); // All finished, none taken yet: drop the oldest result
+				return; // Everything is young or already authenticated: keep it, drop tcp
 			oldest->thread.request_stop();
 			stale.splice(stale.end(), attempts, oldest);
 		}
@@ -195,14 +222,14 @@ public:
 		},
 		                    std::move(tcp));
 
-		attempts.push_back({addr.sin6_addr, std::move(state), std::move(thread)});
+		attempts.push_back({addr.sin6_addr, now, std::move(state), std::move(thread)});
 	}
 
 	// Collects finished attempts and returns the oldest one that succeeded, if any.
 	// Other successful attempts stay queued for the next call.
 	std::optional<Result> take()
 	{
-		reap_stale();
+		std::erase_if(stale, finished);
 
 		for (auto it = attempts.begin(); it != attempts.end();)
 		{

@@ -58,7 +58,7 @@ std::optional<wivrn::authenticated_peer> wivrn::accept_connection(
 			return {};
 		}
 
-		while (true)
+		while (handshakes.has_room())
 		{
 			auto tcp = listener.poll();
 			if (not tcp)

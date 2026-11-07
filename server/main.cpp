@@ -503,7 +503,8 @@ gboolean headset_connected(gpointer user_data)
 
 	assert(handshakes);
 
-	while (true)
+	// Connections left in the gate while the pool has no room are handed over on a later tick
+	while (handshakes->has_room())
 	{
 		std::optional<TCP> tcp = listener->poll();
 		if (not tcp)

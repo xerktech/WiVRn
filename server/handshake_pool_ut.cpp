@@ -135,20 +135,35 @@ static void test_handshake_pool()
 	}
 
 	{
-		// Stalled peers on many addresses cannot keep a new one out: the oldest stalled one makes room
-		handshake_pool<int> pool;
-		std::vector<int> clients(handshake_pool<int>::max_attempts);
+		// Stalled peers on many addresses cannot keep a new one out for long: once older than
+		// min_age, the oldest one makes room. Before that, fresh connections cannot evict anything.
+		using pool_t = handshake_pool<int>;
+		pool_t pool;
+		auto t0 = pool_t::clock::now();
+		std::vector<int> clients(pool_t::max_attempts);
 		for (size_t i = 0; i < clients.size(); ++i)
 		{
 			std::string addr = "127.0.1." + std::to_string(i + 1);
-			pool.start(connect_from(listener, addr.c_str(), clients[i]), [&](std::stop_token s, TCP && t) { return stall(s, std::move(t), cancelled); });
+			pool.start(connect_from(listener, addr.c_str(), clients[i]), [&](std::stop_token s, TCP && t) { return stall(s, std::move(t), cancelled); }, t0);
 		}
-		CHECK(pool.size() == handshake_pool<int>::max_attempts);
+		CHECK(pool.size() == pool_t::max_attempts);
+		CHECK(not pool.has_room(t0 + pool_t::min_age - 1ms));
 
+		// A burst arriving while every attempt is young is dropped, nothing is cancelled
 		int before = cancelled;
+		int junk;
+		std::atomic<bool> junk_ran = false;
+		pool.start(connect_from(listener, "127.0.2.2", junk), [&](std::stop_token, TCP &&) -> int { junk_ran = true; throw std::runtime_error("junk"); }, t0 + 1s);
+		CHECK(pool.size() == pool_t::max_attempts);
+		std::this_thread::sleep_for(100ms);
+		CHECK(not junk_ran);
+		CHECK(cancelled == before);
+
+		auto later = t0 + pool_t::min_age;
+		CHECK(pool.has_room(later));
 		int headset;
-		pool.start(connect_from(listener, "127.0.2.1", headset), [](std::stop_token, TCP &&) { return 9; });
-		CHECK(pool.size() == handshake_pool<int>::max_attempts);
+		pool.start(connect_from(listener, "127.0.2.1", headset), [](std::stop_token, TCP &&) { return 9; }, later);
+		CHECK(pool.size() == pool_t::max_attempts);
 		CHECK(take_within(pool, 2s) == 9);
 		std::this_thread::sleep_for(100ms);
 		pool.take(); // Reaps the evicted thread
@@ -158,7 +173,45 @@ static void test_handshake_pool()
 		pool.clear();
 		CHECK(cancelled == before + int(clients.size()));
 		CHECK(pool.size() == 0);
+		close(junk);
 		close(headset);
+		for (int c: clients)
+			close(c);
+	}
+
+	{
+		// A headset that has authenticated but is not taken yet is never the one evicted
+		using pool_t = handshake_pool<int>;
+		pool_t pool;
+		auto t0 = pool_t::clock::now();
+		int headset;
+		pool.start(connect_from(listener, "127.0.3.1", headset), [](std::stop_token, TCP &&) { return 5; }, t0);
+		std::this_thread::sleep_for(100ms); // Finished, not taken
+		std::vector<int> clients(pool_t::max_attempts - 1);
+		for (size_t i = 0; i < clients.size(); ++i)
+		{
+			std::string addr = "127.0.4." + std::to_string(i + 1);
+			pool.start(connect_from(listener, addr.c_str(), clients[i]), [&](std::stop_token s, TCP && t) { return stall(s, std::move(t), cancelled); }, t0);
+		}
+		auto later = t0 + pool_t::min_age;
+		int other;
+		CHECK(pool.has_room(later));
+		pool.start(connect_from(listener, "127.0.3.2", other), [&](std::stop_token s, TCP && t) { return stall(s, std::move(t), cancelled); }, later);
+		CHECK(pool.take() == 5);
+
+		// Failed attempts free their slot without evicting anyone
+		pool.clear();
+		for (size_t i = 0; i < clients.size(); ++i)
+		{
+			std::string addr = "127.0.5." + std::to_string(i + 1);
+			close(clients[i]);
+			pool.start(connect_from(listener, addr.c_str(), clients[i]), [](std::stop_token, TCP &&) -> int { throw std::runtime_error("junk"); }, later);
+		}
+		std::this_thread::sleep_for(100ms);
+		CHECK(pool.has_room(later));
+		CHECK(pool.size() == 0);
+		close(headset);
+		close(other);
 		for (int c: clients)
 			close(c);
 	}

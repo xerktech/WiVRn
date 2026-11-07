@@ -13,6 +13,8 @@ paths:
   - Anything that can stall on the peer (PIN entry, first record) belongs in `authenticate`.
   - `authenticate` must only touch its own socket: no IPC socket, no UDP port bind.
   - Shared state touched there needs a lock (see `identity_key_mutex`).
+- `handshake_pool` evicts only attempts older than `min_age`; never make fresh attempts evictable.
+  A burst of junk connections would then cancel a headset partway through its handshake.
 - Keep the `handshake_gate` open until a handshake fully succeeds; closing it drops every peer
   queued in it, including a headset that already sent its handshake.
 - Wrong PINs are throttled by `pin_throttle`, never by delaying the listener: paired headsets must
