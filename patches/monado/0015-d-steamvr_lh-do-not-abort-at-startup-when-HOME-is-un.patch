@@ -1,36 +1,20 @@
-From ee56a4feb283e690e578660d0dbca670d4136498 Mon Sep 17 00:00:00 2001
+From ba679523c8af4fa6aeee0876e32f8c68e913695a Mon Sep 17 00:00:00 2001
 From: Malcolm Habeeb <malcolm@tesoroxp.com>
-Date: Sat, 7 Nov 2026 00:14:38 -0500
+Date: Sat, 7 Nov 2026 00:56:33 -0500
 Subject: [PATCH] d/steamvr_lh: do not abort at startup when HOME is unset
 
 STEAM_INSTALL_DIR was built during static initialisation from
 std::string(getenv("HOME")), which throws std::logic_error for a null
 pointer, so every program linking the driver (wivrn-server included)
-aborted before main when HOME was unset. Treat an unset or relative
-HOME as "Steam not found" instead, and never fall back to Steam paths
-at the filesystem root.
+aborted before main when HOME was unset. Leave it empty when HOME is
+unset or relative, and fail device creation up front then, so no Steam
+path falls back to the filesystem root.
 ---
- src/xrt/drivers/steamvr_lh/device.cpp     |  4 ++++
- src/xrt/drivers/steamvr_lh/steamvr_lh.cpp | 20 ++++++++++++++++++--
- 2 files changed, 22 insertions(+), 2 deletions(-)
+ src/xrt/drivers/steamvr_lh/steamvr_lh.cpp | 20 +++++++++++++++++++-
+ 1 file changed, 19 insertions(+), 1 deletion(-)
 
-diff --git a/src/xrt/drivers/steamvr_lh/device.cpp b/src/xrt/drivers/steamvr_lh/device.cpp
-index 08a0d6218..64e2b74ca 100644
---- a/src/xrt/drivers/steamvr_lh/device.cpp
-+++ b/src/xrt/drivers/steamvr_lh/device.cpp
-@@ -1077,6 +1077,10 @@ Device::init_chaperone(const std::string &steam_install)
- 
- 	initialized = true;
- 
-+	// No Steam install known (HOME unset): never read config files from the filesystem root
-+	if (steam_install.empty())
-+		return;
-+
- 	// Lighthouse driver seems to create a lighthousedb.json and a chaperone_info.vrchap (which is json)
- 	// We will use the known_universes from the lighthousedb.json to match to a universe from chaperone_info.vrchap
- 
 diff --git a/src/xrt/drivers/steamvr_lh/steamvr_lh.cpp b/src/xrt/drivers/steamvr_lh/steamvr_lh.cpp
-index 54ab0990c..c1ebc2e9e 100644
+index 54ab0990c..df2199e3c 100644
 --- a/src/xrt/drivers/steamvr_lh/steamvr_lh.cpp
 +++ b/src/xrt/drivers/steamvr_lh/steamvr_lh.cpp
 @@ -88,7 +88,19 @@ static constexpr size_t MAX_CONTROLLERS = 16;
@@ -42,7 +26,7 @@ index 54ab0990c..c1ebc2e9e 100644
 +get_steam_install_dir()
 +{
 +	// Runs during static initialisation: constructing a std::string from a null HOME would
-+	// abort every program linking this driver before main. Without HOME, Steam is not found.
++	// abort every program linking this driver before main. Empty when HOME is unusable.
 +	const char *home = getenv("HOME");
 +	if (home == nullptr || home[0] != '/') {
 +		return std::string();
@@ -54,26 +38,19 @@ index 54ab0990c..c1ebc2e9e 100644
  constexpr auto STEAMVR_APPID = "250820";
  
  // Parse libraryfolder.vdf to find where SteamVR is installed
-@@ -97,6 +109,10 @@ find_steamvr_install()
+@@ -1006,6 +1018,12 @@ extern "C" enum xrt_result
+ steamvr_lh_create_devices(struct xrt_prober *xp, struct xrt_system_devices *xsysd)
  {
- 	using namespace tyti;
  	u_logging_level level = debug_get_log_option_lh_log();
++	// Every Steam path below is relative to the Steam install: without one they would point at
++	// the filesystem root (/config, /steamapps), so give up instead.
 +	if (STEAM_INSTALL_DIR.empty()) {
 +		U_LOG_IFL_E(level, "HOME is not set, cannot find the Steam install");
-+		return std::string();
++		return xrt_result::XRT_ERROR_DEVICE_CREATION_FAILED;
 +	}
- 	std::ifstream file(STEAM_INSTALL_DIR + "/steamapps/libraryfolders.vdf");
- 	if (!file.is_open()) {
- 		U_LOG_IFL_E(level, "Failed to open libraryfolders.vdf");
-@@ -1009,7 +1025,7 @@ steamvr_lh_create_devices(struct xrt_prober *xp, struct xrt_system_devices *xsys
  	// The driver likes to create a bunch of transient folders -
  	// let's try to make sure they're created where they normally are.
  	std::filesystem::path dir = STEAM_INSTALL_DIR + "/config/lighthouse";
--	if (!std::filesystem::exists(dir)) {
-+	if (STEAM_INSTALL_DIR.empty() || !std::filesystem::exists(dir)) {
- 		U_LOG_IFL_W(level,
- 		            "Couldn't find lighthouse config folder (%s)- transient folders will be created in current "
- 		            "working directory (%s)",
 -- 
 2.43.0
 
