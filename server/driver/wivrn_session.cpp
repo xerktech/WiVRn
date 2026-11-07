@@ -1260,22 +1260,32 @@ void wivrn_session::reconnect(std::stop_token stop)
 	assert(mnd_ipc_server);
 	U_LOG_I("Waiting for new connection");
 
+	// Kept across attempts: when a handshake fails, peers already queued are not dropped
+	std::optional<handshake_gate> gate;
+
 	while (not stop.stop_requested())
 	{
 		try
 		{
 			// await a new headset connection
+			if (not gate)
+				gate.emplace(configuration().port);
 
-			auto tcp = accept_connection(*this, stop, &wivrn_session::quit_if_no_client);
+			auto peer = accept_connection(
+			        *this,
+			        stop,
+			        *gate,
+			        [this](std::stop_token stop, TCP && tcp, const std::function<void(bool)> & waiting) { return connection->authenticate_peer(stop, std::move(tcp), waiting); },
+			        &wivrn_session::quit_if_no_client);
 			if (stop.stop_requested())
 				return;
-			if (not tcp)
+			if (not peer)
 			{
 				request_stop();
 				return;
 			}
 
-			connection->reset(stop, std::move(*tcp), [this]() { quit_if_no_client(); });
+			connection->reset(stop, std::move(*peer), [this]() { quit_if_no_client(); });
 			*net_exception.lock() = nullptr;
 
 			// validate if headset is compatible with the current session

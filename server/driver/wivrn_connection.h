@@ -19,15 +19,18 @@
 
 #pragma once
 
+#include "secrets.h"
 #include "wivrn_ipc.h"
 #include "wivrn_packets.h"
 #include "wivrn_sockets.h"
 
 #include <atomic>
+#include <functional>
 #include <optional>
 #include <poll.h>
 #include <stdexcept>
 #include <stop_token>
+#include <string>
 #include <system_error>
 
 namespace wivrn
@@ -37,6 +40,8 @@ class incorrect_pin : public std::runtime_error
 public:
 	incorrect_pin();
 };
+
+struct authenticated_peer;
 
 class wivrn_connection
 {
@@ -48,6 +53,13 @@ public:
 		pairing,
 	};
 
+	// First part of the handshake, up to the point where the peer has proven it holds a paired key
+	// (or the PIN). It only touches tcp, so several can run at once (see handshake_pool): a peer
+	// that stalls here cannot keep another headset out. Throws if the peer is refused.
+	// waiting is called with true when it starts waiting for the peer, false when data arrived.
+	static authenticated_peer authenticate(std::stop_token stop_token, encryption_state state, const std::string & pin, TCP && tcp, const std::function<void(bool)> & waiting = {});
+	authenticated_peer authenticate_peer(std::stop_token stop_token, TCP && tcp, const std::function<void(bool)> & waiting = {}) const;
+
 private:
 	typed_socket<TCP, from_headset::packets, to_headset::packets> control;
 	typed_socket<UDP, from_headset::packets, to_headset::packets> stream;
@@ -57,10 +69,11 @@ private:
 
 	from_headset::headset_info_packet info_packet;
 
-	void init(std::stop_token stop_token, std::function<void()> tick = []() {});
+	// Rest of the handshake (stream socket, headset info), one connection at a time
+	void init(std::stop_token stop_token, authenticated_peer && peer, std::function<void()> tick = []() {});
 
 public:
-	wivrn_connection(std::stop_token stop_token, encryption_state state, std::string pin, TCP && tcp);
+	wivrn_connection(std::stop_token stop_token, encryption_state state, std::string pin, authenticated_peer && peer);
 	wivrn_connection(const wivrn_connection &) = delete;
 	wivrn_connection & operator=(const wivrn_connection &) = delete;
 
@@ -73,7 +86,7 @@ public:
 	{
 		return active;
 	}
-	void reset(std::stop_token stop, TCP && tcp, std::function<void()> tick = {});
+	void reset(std::stop_token stop, authenticated_peer && peer, std::function<void()> tick = {});
 	void shutdown();
 
 	template <typename T>
@@ -170,4 +183,15 @@ public:
 		return r;
 	}
 };
+
+// Result of wivrn_connection::authenticate
+struct authenticated_peer
+{
+	TCP control;          // Keys already set
+	bool add_key = false; // Newly paired: store its key once the handshake completes
+	std::string public_key;
+	std::string name;
+	std::optional<secrets> keys; // Empty when encryption is disabled
+};
+
 } // namespace wivrn
