@@ -33,7 +33,11 @@ class handshake_error : public std::exception
 
 public:
 	const char * what() const noexcept override;
-	handshake_error(std::string_view message);
+	handshake_error(std::string_view message, bool closed_by_server = false);
+
+	// The server closed or reset the connection mid-handshake, e.g. when it evicts a slow
+	// handshake under load: retrying can succeed, unlike a refusal the server stated
+	const bool closed_by_server;
 };
 
 class wivrn_session

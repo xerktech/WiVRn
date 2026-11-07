@@ -50,11 +50,22 @@ const char * handshake_error::what() const noexcept
 	return message.c_str();
 }
 
-handshake_error::handshake_error(std::string_view message) :
-        message(message) {}
+handshake_error::handshake_error(std::string_view message, bool closed_by_server) :
+        message(message), closed_by_server(closed_by_server) {}
 
 namespace
 {
+bool is_closed_by_peer(const std::exception & e)
+{
+	if (dynamic_cast<const wivrn::socket_shutdown *>(&e))
+		return true;
+
+	if (auto se = dynamic_cast<const std::system_error *>(&e))
+		return se->code() == std::errc::connection_reset or se->code() == std::errc::broken_pipe;
+
+	return false;
+}
+
 template <typename T>
 void init_stream(T & stream)
 {
@@ -283,7 +294,7 @@ wivrn_session::wivrn_session(sockaddr_in6 address, bool tcp_only, crypto::key & 
 	}
 	catch (std::exception & e)
 	{
-		throw handshake_error{e.what()};
+		throw handshake_error{e.what(), is_closed_by_peer(e)};
 	}
 }
 
@@ -296,6 +307,6 @@ wivrn_session::wivrn_session(sockaddr_in address, bool tcp_only, crypto::key & h
 	}
 	catch (std::exception & e)
 	{
-		throw handshake_error{e.what()};
+		throw handshake_error{e.what(), is_closed_by_peer(e)};
 	}
 }
