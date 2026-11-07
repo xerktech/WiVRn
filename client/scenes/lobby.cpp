@@ -320,11 +320,16 @@ std::unique_ptr<wivrn_session> scenes::lobby::connect_to_session(wivrn_discover:
 		struct connection_cancelled
 		{};
 
+		// Set once the user has typed the PIN: a drop after that is most likely the server
+		// refusing the PIN check (throttled after a wrong PIN or while another check runs),
+		// and retrying would only ask for the PIN again
+		bool pin_entered = false;
+
 		try
 		{
 			spdlog::info("Connection to {}", address_string);
 
-			return std::visit([this, &service](auto & address) {
+			return std::visit([this, &service, &pin_entered](auto & address) {
 				return std::make_unique<wivrn_session>(address, service.tcp_only, keypair, [&](int fd) {
 					auto request = pin_request.lock();
 					request->pin_requested = true;
@@ -365,6 +370,7 @@ std::unique_ptr<wivrn_session> scenes::lobby::connect_to_session(wivrn_discover:
 					if (request->pin_cancelled)
 						throw connection_cancelled{};
 
+					pin_entered = true;
 					return request->pin;
 				});
 			},
@@ -379,6 +385,8 @@ std::unique_ptr<wivrn_session> scenes::lobby::connect_to_session(wivrn_discover:
 		{
 			spdlog::warn("Error during handshake to {} ({}): {}", service.hostname, address_string, e.what());
 			std::string txt = fmt::format(_F("Cannot connect to {} ({}): {}"), service.hostname, address_string, e.what());
+			if (e.closed_by_server and pin_entered)
+				throw std::runtime_error(fmt::format(_F("Cannot connect to {} ({}): the server closed the connection after the PIN was entered. It refuses PIN checks for a while after a wrong PIN or while another headset is pairing: wait a minute and try again."), service.hostname, address_string));
 			if (e.closed_by_server)
 				throw dropped_by_server{txt};
 			throw std::runtime_error(txt);
