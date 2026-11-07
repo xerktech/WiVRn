@@ -48,6 +48,9 @@ paths:
 - `server/driver/wivrn_connection.cpp` syntax-checks with `g++ -fsyntax-only` given OpenXR SDK
   headers, nlohmann/json, boost/pfr and a stub `wivrn_config.h` defining `wivrn::default_port`.
 - OpenXR headers must be 1.1.59 (Ubuntu's 1.0.20 lacks types `wivrn_packets.h` uses).
-- `authenticate_ut`'s throttle test drives 7 wrong PINs, so the `pin_throttle` growth
+- `authenticate_ut`'s throttle test drives 8 wrong PINs, so the `pin_throttle` growth
   (`initial_delay`, doubling) and the 8s wait in `pin_attempt` bound it: change them together.
-- LeakSanitizer aborts at exit in sandboxes without ptrace; run with `ASAN_OPTIONS=detect_leaks=0`.
+- LeakSanitizer aborts at exit in sandboxes without ptrace. `ASAN_OPTIONS=detect_leaks=0` works
+  around it locally, but CI keeps LSan on: replay leaks in a chroot or with ptrace before pushing.
+- Handshakes each run on a new thread, so a `thread_local` holding an allocation must free it on
+  thread exit (see `bn_ctx` in `common/smp.cpp`), or every connection leaks it.

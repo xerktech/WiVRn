@@ -253,9 +253,10 @@ static void test_cap_restored_after_pairing()
 // and reports that wait so the handshake pool may evict it
 static void test_throttle_wait_reported()
 {
-	// Each wrong PIN doubles the wait before the next check: after 7 it is 1.28s, under the 8s
-	// the server waits for the throttle, and long enough to tell from the waits on the peer.
-	for (int i = 0; i < 7; ++i)
+	// Each wrong PIN doubles the wait before the next check: after 8 it is 2.56s, under the 8s
+	// the server waits for the throttle, and long enough to tell from the waits on the peer even
+	// when the test runs slowly.
+	for (int i = 0; i < 8; ++i)
 	{
 		handshake h(encryption_state::pairing, "123456");
 		auto headset_key = crypto::key::generate_x448_keypair();
@@ -290,6 +291,14 @@ static void test_throttle_wait_reported()
 	if (not reported)
 		for (auto & e: h.events)
 			printf("  waiting(%d) at %+lldms from pin_check_3\n", e.waiting, (long long)std::chrono::duration_cast<std::chrono::milliseconds>(e.time - result.t3).count());
+
+	// A correct PIN resets the throttle: the next pairing is not delayed
+	handshake next(encryption_state::pairing, "123456");
+	auto next_key = crypto::key::generate_x448_keypair();
+	auto next_result = pair(next, next_key, "123456");
+	next.join();
+	CHECK(next_result.pin_match);
+	CHECK(next_result.t4 - next_result.t3 < 500ms);
 }
 
 int main()

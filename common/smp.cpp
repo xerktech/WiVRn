@@ -26,6 +26,7 @@
 
 #include "smp.h"
 #include <compare>
+#include <memory>
 #include <openssl/bn.h>
 #include <openssl/err.h>
 #include <openssl/evp.h>
@@ -130,8 +131,9 @@ bignum bignum::from_mpi(const std::string & value)
 
 static BN_CTX * bn_ctx()
 {
-	thread_local BN_CTX * ctx = BN_CTX_new();
-	return ctx;
+	// Freed when the thread exits: the server runs each handshake on its own thread
+	thread_local std::unique_ptr<BN_CTX, decltype(&BN_CTX_free)> ctx{BN_CTX_new(), &BN_CTX_free};
+	return ctx.get();
 }
 
 bignum operator-(const bignum & a, const bignum & b)
