@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <fstream>
 #include <functional>
+#include <limits>
 #include <magic_enum.hpp>
 #include <stdexcept>
 #include <string_view>
@@ -118,7 +119,17 @@ std::optional<T> read_value(simdjson::simdjson_result<simdjson::dom::element> va
 	else // floating point
 	{
 		if (val.is_double())
-			return (T)val.get_double();
+		{
+			// Reject values the target type cannot hold (e.g. 1e300 into a float) instead of
+			// narrowing them to inf. The client builds with -ffast-math, which lets the
+			// compiler assume no inf/NaN exist, so later clamps or isfinite() checks on the
+			// narrowed value are not reliable. JSON numbers always parse to a finite double,
+			// so this comparison on the double itself is safe under fast-math.
+			double d = val.get_double();
+			if (d >= -double(std::numeric_limits<T>::max()) and d <= double(std::numeric_limits<T>::max()))
+				return (T)d;
+			return std::nullopt;
+		}
 		if (val.is_int64())
 			return (T)val.get_int64();
 		if (val.is_uint64())
