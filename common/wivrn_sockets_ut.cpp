@@ -22,6 +22,7 @@
 #include <arpa/inet.h>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <netinet/in.h>
 #include <poll.h>
 #include <sys/socket.h>
@@ -437,6 +438,12 @@ static std::optional<TCP> gate_poll(handshake_gate & gate, std::chrono::steady_c
 	return gate.poll(now);
 }
 
+static size_t open_fds()
+{
+	auto it = std::filesystem::directory_iterator("/proc/self/fd");
+	return std::distance(begin(it), end(it));
+}
+
 static void test_handshake_gate()
 {
 	handshake_gate gate(0);
@@ -509,6 +516,7 @@ static void test_handshake_gate()
 	auto t1 = t0 + 2 * handshake_gate::first_record_timeout;
 	CHECK(not gate_poll(gate, t1)); // expire the flood
 	CHECK(gate.pending_count() == 0);
+	size_t fds_before = open_fds();
 	int ready = gate_connect(port);
 	send_record(ready, 8, 8);
 	std::vector<int> burst;
@@ -522,6 +530,10 @@ static void test_handshake_gate()
 	for (int fd: burst)
 		close(fd);
 	close(ready);
+	got.reset();
+	gate_poll(gate, t1 + 2 * handshake_gate::first_record_timeout); // drain and expire the burst
+	CHECK(gate.pending_count() == 0);
+	CHECK(open_fds() == fds_before); // no descriptor leaked on the full-gate handoff path
 
 	for (int fd: extra)
 		if (fd >= 0)
