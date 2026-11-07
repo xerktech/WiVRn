@@ -53,6 +53,7 @@
 #include <spdlog/spdlog.h>
 #include <string>
 #include <sys/poll.h>
+#include <thread>
 #include <vulkan/vulkan_raii.hpp>
 
 #include <arpa/inet.h>
@@ -222,6 +223,33 @@ static std::string ip_address_to_string(const sockaddr_in6 & addr)
 	return ip_address_to_string(addr.sin6_addr);
 }
 
+namespace
+{
+// The server closed the connection mid-handshake: worth retrying, unlike a refusal it stated
+struct dropped_by_server : std::runtime_error
+{
+	using std::runtime_error::runtime_error;
+};
+
+// Retries of a dropped handshake. The server drops handshakes it cannot serve, e.g. while
+// flooded by stalled connections; the backoff (250ms, 500ms, 1s, 2s, 2s) outlasts the failure
+// runs measured under such a flood (XERK-2763).
+constexpr int max_handshake_retries = 5;
+
+// Returns false if the user cancelled the connection while waiting
+bool wait_before_retry(int retry, utils::async_token<std::unique_ptr<wivrn_session>, std::string> & token)
+{
+	auto deadline = std::chrono::steady_clock::now() + std::min<std::chrono::milliseconds>(250ms * (1 << retry), 2s);
+	while (std::chrono::steady_clock::now() < deadline)
+	{
+		if (token.is_cancelled())
+			return false;
+		std::this_thread::sleep_for(50ms);
+	}
+	return not token.is_cancelled();
+}
+} // namespace
+
 std::unique_ptr<wivrn_session> scenes::lobby::connect_to_session(wivrn_discover::service service, bool manual_connection)
 {
 	if (!manual_connection)
@@ -292,11 +320,16 @@ std::unique_ptr<wivrn_session> scenes::lobby::connect_to_session(wivrn_discover:
 		struct connection_cancelled
 		{};
 
+		// Set once the user has typed the PIN: a drop after that is most likely the server
+		// refusing the PIN check (throttled after a wrong PIN or while another check runs),
+		// and retrying would only ask for the PIN again
+		bool pin_entered = false;
+
 		try
 		{
 			spdlog::info("Connection to {}", address_string);
 
-			return std::visit([this, &service](auto & address) {
+			return std::visit([this, &service, &pin_entered](auto & address) {
 				return std::make_unique<wivrn_session>(address, service.tcp_only, keypair, [&](int fd) {
 					auto request = pin_request.lock();
 					request->pin_requested = true;
@@ -318,10 +351,11 @@ std::unique_ptr<wivrn_session> scenes::lobby::connect_to_session(wivrn_discover:
 							throw std::system_error(errno, std::system_category());
 						}
 
+						// Hang-up or reset: the server dropped us (e.g. evicted while flooded), retryable
 						if (fds.revents & (POLLHUP | POLLERR))
 						{
 							request->pin_requested = false;
-							throw std::runtime_error("Error on control socket");
+							throw socket_shutdown{};
 						}
 
 						if (fds.revents & POLLRDHUP)
@@ -336,6 +370,7 @@ std::unique_ptr<wivrn_session> scenes::lobby::connect_to_session(wivrn_discover:
 					if (request->pin_cancelled)
 						throw connection_cancelled{};
 
+					pin_entered = true;
 					return request->pin;
 				});
 			},
@@ -350,6 +385,10 @@ std::unique_ptr<wivrn_session> scenes::lobby::connect_to_session(wivrn_discover:
 		{
 			spdlog::warn("Error during handshake to {} ({}): {}", service.hostname, address_string, e.what());
 			std::string txt = fmt::format(_F("Cannot connect to {} ({}): {}"), service.hostname, address_string, e.what());
+			if (e.closed_by_server and pin_entered)
+				throw std::runtime_error(fmt::format(_F("Cannot connect to {} ({}): the server closed the connection after the PIN was entered. It refuses PIN checks for a while after a wrong PIN or while another headset is pairing: wait a minute and try again."), service.hostname, address_string));
+			if (e.closed_by_server)
+				throw dropped_by_server{txt};
 			throw std::runtime_error(txt);
 		}
 		catch (std::exception & e)
@@ -439,7 +478,22 @@ void scenes::lobby::connect(const configuration::server_data & data)
 	async_session = utils::async<std::unique_ptr<wivrn_session>, std::string>(
 	        [this](auto token, wivrn_discover::service service, bool manual) {
 		        token.set_progress(_("Waiting for connection"));
-		        return connect_to_session(service, manual);
+		        for (int retry = 0;; ++retry)
+		        {
+			        try
+			        {
+				        return connect_to_session(service, manual);
+			        }
+			        catch (dropped_by_server & e)
+			        {
+				        if (retry >= max_handshake_retries)
+					        throw;
+				        if (not wait_before_retry(retry, token))
+					        return std::unique_ptr<wivrn_session>{};
+				        spdlog::info("Retrying after the server dropped the connection: {}", e.what());
+				        token.set_progress(_("Connection dropped by server, retrying"));
+			        }
+		        }
 	        },
 	        data.service,
 	        data.manual);
