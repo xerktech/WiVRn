@@ -419,7 +419,10 @@ void update_fsm()
 
 	if (quitting_main_loop)
 	{
+		// Cancels a handshake in progress: only a forked server is left to stop. Its result may
+		// still be queued; headset_connected_success/_failed then do nothing.
 		connection_thread.reset();
+		server_running = server_watch != 0;
 
 		if (server_running)
 			kill_server();
