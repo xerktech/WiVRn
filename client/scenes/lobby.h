@@ -248,6 +248,7 @@ class lobby : public scene_impl<lobby>
 	void gui_debug_node_hierarchy(entt::entity root = entt::null);
 	void gui_debug();
 	void gui_about();
+	void gui_headset_key_fingerprint();
 	void gui_licenses();
 	void gui_keyboard();
 	void gui_first_run();
@@ -262,6 +263,8 @@ class lobby : public scene_impl<lobby>
 	std::optional<glm::vec3> check_recenter_gui(glm::vec3 head_position, glm::quat head_orientation);
 
 	crypto::key keypair;
+	// keypair's public_key_fingerprint(), shown to the user; empty if it could not be computed
+	std::string keypair_fingerprint;
 
 public:
 	virtual ~lobby();

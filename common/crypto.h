@@ -68,6 +68,12 @@ public:
 	// Raw public key bytes, works with x25519, x448 keys
 	std::vector<uint8_t> raw_public_key() const;
 
+	// Short fingerprint of the public key for people to compare by eye: the first 8 bytes of
+	// SHA-256 over its DER SubjectPublicKeyInfo (the body of public_key()'s PEM), as hex in
+	// groups of 4, e.g. "1a2b 3c4d 5e6f 7a8b". fenrir's headset confirmation page shows the same
+	// value (pkg/controllers/library_headsets.go headsetFingerprint): keep the two in step.
+	std::string public_key_fingerprint() const;
+
 	operator EVP_PKEY *()
 	{
 		return pkey;
