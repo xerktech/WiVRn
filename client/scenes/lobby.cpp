@@ -346,10 +346,11 @@ std::unique_ptr<wivrn_session> scenes::lobby::connect_to_session(wivrn_discover:
 							throw std::system_error(errno, std::system_category());
 						}
 
+						// Hang-up or reset: the server dropped us (e.g. evicted while flooded), retryable
 						if (fds.revents & (POLLHUP | POLLERR))
 						{
 							request->pin_requested = false;
-							throw std::runtime_error("Error on control socket");
+							throw socket_shutdown{};
 						}
 
 						if (fds.revents & POLLRDHUP)
