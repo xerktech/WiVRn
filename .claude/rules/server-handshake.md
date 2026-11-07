@@ -22,7 +22,10 @@ paths:
   queued in it, including a headset that already sent its handshake.
 - Wrong PINs are throttled by `pin_throttle`, never by delaying the listener: paired headsets must
   not wait because someone guessed a PIN.
-  - `pin_attempt` waits (under 8s, the headset's own wait for `pin_check_2`) instead of refusing;
+- Take the `pin_attempt` only after the last `receive` of the PIN exchange (pin_check_3).
+  - Holding it across a peer wait let one stalled connection per 10 s block all pairing.
+  - SMP leaks nothing about the PIN before pin_check_4, so earlier steps need no throttle.
+  - `pin_attempt` waits (under 8s, the headset's own wait for `pin_check_4`) instead of refusing;
     it reports that wait through `waiting` so the pool can still evict it.
 - `authenticate` caps TCP records at 64 KiB and restores the default before handing the socket on:
   a length prefix alone makes `TCP::receive_raw` allocate the whole record.

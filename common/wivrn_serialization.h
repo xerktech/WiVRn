@@ -250,7 +250,9 @@ public:
 	{
 		check_remaining_size(size);
 
-		memcpy(data, buffer.data(), size);
+		// An empty vector has a null data(); memcpy with a null pointer is undefined even for 0 bytes
+		if (size > 0)
+			memcpy(data, buffer.data(), size);
 		buffer = buffer.subspan(size);
 	}
 

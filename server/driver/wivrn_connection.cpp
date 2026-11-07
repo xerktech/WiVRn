@@ -32,7 +32,7 @@
 #include <iostream>
 #include <mutex>
 #include <poll.h>
-#include <regex>
+#include <string_view>
 #include <sys/socket.h>
 #include <variant>
 
@@ -44,17 +44,43 @@ static void handle_event_from_main_loop(to_monado::disconnect) {}
 static void handle_event_from_main_loop(to_monado::set_bitrate) {}
 static void handle_event_from_main_loop(wivrn::to_headset::stream_tab_change) {}
 
-static std::string clean_key(std::string key)
+// Strips the PEM armour and all whitespace, leaving only the base64 body.
+// Plain string processing rather than std::regex: handshakes run on concurrent threads, and
+// libstdc++'s regex shares an unsynchronised ctype cache between them.
+static std::string clean_key(const std::string & key)
 {
-	static const std::regex header{"^-+BEGIN .*-+$", std::regex_constants::multiline};
-	static const std::regex footer{"^-+END .*-+$", std::regex_constants::multiline};
-	static const std::regex whitespace{"[[:space:]]"};
+	auto is_space = [](char c) { return c == ' ' or c == '\t' or c == '\n' or c == '\v' or c == '\f' or c == '\r'; };
 
-	key = std::regex_replace(key, header, "");
-	key = std::regex_replace(key, footer, "");
-	key = std::regex_replace(key, whitespace, "");
+	// A whole line of the form -+BEGIN .*-+ or -+END .*-+
+	auto is_armour = [](std::string_view line) {
+		size_t dashes = line.find_first_not_of('-');
+		if (dashes == 0 or dashes == std::string_view::npos)
+			return false;
+		line.remove_prefix(dashes);
+		if (not line.starts_with("BEGIN ") and not line.starts_with("END "))
+			return false;
+		return line.size() > 0 and line.back() == '-';
+	};
 
-	return key;
+	std::string result;
+	result.reserve(key.size());
+
+	std::string_view rest = key;
+	while (not rest.empty())
+	{
+		size_t eol = rest.find_first_of("\r\n");
+		std::string_view line = rest.substr(0, eol);
+		rest.remove_prefix(eol == std::string_view::npos ? rest.size() : eol + 1);
+
+		if (is_armour(line))
+			continue;
+
+		for (char c: line)
+			if (not is_space(c))
+				result += c;
+	}
+
+	return result;
 }
 
 wivrn::incorrect_pin::incorrect_pin() :
@@ -86,9 +112,10 @@ class pin_attempt
 	bool correct = false;
 
 public:
-	// The headset waits 10s for pin_check_2 (client/wivrn_client.cpp): wait for a free slot for
-	// less than that rather than refusing, so a user who mistyped once just retries. The wait
-	// counts as waiting for the peer, so the handshake pool can still cancel it to make room.
+	// The headset waits 10s for pin_check_4 (client/wivrn_client.cpp): wait for the running
+	// check or the delay after a wrong PIN for less than that rather than refusing, so a user who
+	// mistyped once just retries. The wait counts as waiting for the peer, so the handshake pool
+	// can still cancel it to make room.
 	pin_attempt(std::stop_token stop, const std::function<void(bool)> & waiting)
 	{
 		if (waiting)
@@ -107,7 +134,7 @@ public:
 		correct = true;
 	}
 
-	// An abandoned check counts as wrong: it may have been a guess
+	// A check that fails after it began (bad pin_check_3, send error) counts as wrong
 	~pin_attempt()
 	{
 		auto delay = pin_attempts.end(correct);
@@ -243,15 +270,15 @@ wivrn::authenticated_peer wivrn::wivrn_connection::authenticate(std::stop_token 
 
 					auto msg1 = std::get<from_headset::pin_check_1>(receive(2min)).message;
 
-					// Throttled from here: the peer learns whether its PIN matched from pin_check_4
-					pin_attempt attempt(stop_token, waiting);
-
 					auto msg2 = pin_check.step2(msg1, pin_check_secret(pin, identity_key, headset_key));
 					control.send(to_headset::pin_check_2{msg2});
 
-					// Short: the headset answers at once, and a peer stalling here holds the only
-					// PIN check while other headsets wait for it (pin_attempt waits 8s at most)
-					auto msg3 = std::get<from_headset::pin_check_3>(receive(5s)).message;
+					auto msg3 = std::get<from_headset::pin_check_3>(receive(10s)).message;
+
+					// Throttled from here, after the last wait on the peer: it learns whether its PIN
+					// matched only from pin_check_4, so a peer that stalls earlier learns nothing,
+					// holds no throttle and does not count as a wrong PIN
+					pin_attempt attempt(stop_token, waiting);
 
 					auto [msg4, pin_match] = pin_check.step4(msg3);
 					control.send(to_headset::pin_check_4{msg4});
@@ -419,6 +446,15 @@ void wivrn::wivrn_connection::init(std::stop_token stop_token, authenticated_pee
 		});
 	else if (peer.keys)
 		wivrn::update_last_connection_timestamp(peer.public_key);
+
+	// Like the server process (main.cpp headset_connected_success), leave pairing mode after any
+	// successful connection, paired or not. This object moves into the forked session, whose
+	// reconnects (authenticate_peer) would otherwise still pair any headset that knows the old PIN.
+	if (state == encryption_state::pairing)
+	{
+		state = encryption_state::enabled;
+		pin.clear();
+	}
 }
 
 void wivrn::wivrn_connection::reset(std::stop_token stop, authenticated_peer && peer, std::function<void()> tick)

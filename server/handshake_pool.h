@@ -41,9 +41,11 @@
 namespace wivrn
 {
 // Rate limit on PIN checks, shared by every connection.
-// Only one PIN check runs at a time, and each wrong (or abandoned) one doubles the wait before the
-// next is allowed, up to max_delay. It throttles PIN guessing, not connections: a headset that is
-// already paired never goes through a PIN check, so a peer guessing PINs cannot delay it.
+// Only one PIN check runs at a time, and each wrong one doubles the wait before the next is
+// allowed, up to max_delay. A check holds the throttle only while the server computes its answer,
+// never while waiting on the peer, so a stalling peer cannot block pairing.
+// It throttles PIN guessing, not connections: a headset that is already paired never goes through
+// a PIN check, so a peer guessing PINs cannot delay it.
 // Tests: test_pin_throttle in server/handshake_pool_ut.cpp.
 class pin_throttle
 {
