@@ -33,6 +33,15 @@ paths:
   - SMP leaks nothing about the PIN before pin_check_4, so earlier steps need no throttle.
   - `pin_attempt` waits (under 8s, the headset's own wait for `pin_check_4`) instead of refusing;
     it reports that wait through `waiting` so the pool can still evict it.
+- Listening resumes 10ms after the session server exits, while the application may still be
+  stopping: never assert or gate `headset_connected` on `children->running()`.
+- `headset_connected` polls from startup, before `on_name_acquired` creates `children` and
+  `dbus_server`; it must leave connections queued until both exist.
+  - `update_fsm` can also run first (SIGINT): `children` may be null there.
+- Quitting resets `connection_thread` while its result may already be queued:
+  `headset_connected_success`/`_failed` must tolerate an empty `connection_thread`.
+- `pin_throttle::max_peer_wait` must stay under the headset's 10s wait for `pin_check_4`.
+  Tests: `test_pin_throttle_waiting` in `server/handshake_pool_ut.cpp`.
 - `authenticate` caps TCP records at 64 KiB and restores the default before handing the socket on:
   a length prefix alone makes `TCP::receive_raw` allocate the whole record.
 

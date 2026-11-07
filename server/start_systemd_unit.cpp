@@ -79,7 +79,13 @@ systemd_units_manager::systemd_units_manager(GDBusConnection * connection, std::
 
 bool systemd_units_manager::running() const
 {
-	return not(jobs.empty() and units.empty());
+	return not(jobs.empty() and units.empty() and pending_units == 0);
+}
+
+void systemd_units_manager::notify_if_stopped()
+{
+	if (state_changed_cb and not running())
+		state_changed_cb();
 }
 
 void systemd_units_manager::stop()
@@ -111,6 +117,7 @@ void systemd_units_manager::on_job_removed(
 	if (strcmp(result, "done"))
 	{
 		std::cerr << "Failed to start application " << node.mapped() << ": " << result << std::endl;
+		self->notify_if_stopped();
 		return;
 	}
 
@@ -123,6 +130,7 @@ void systemd_units_manager::on_job_removed(
 			object += std::format("_{:02x}", *c);
 	}
 
+	++self->pending_units;
 	unit_unit_proxy_new(
 	        self->connection,
 	        G_DBUS_PROXY_FLAGS_NONE,
@@ -131,6 +139,7 @@ void systemd_units_manager::on_job_removed(
 	        nullptr,
 	        [](GObject * source_object, GAsyncResult * res, void * self_) {
 		        auto self = (systemd_units_manager *)(self_);
+		        --self->pending_units;
 
 		        GError * error = nullptr;
 
@@ -139,6 +148,15 @@ void systemd_units_manager::on_job_removed(
 		        {
 			        std::cerr << "failed to create unit proxy: " << error->message << std::endl;
 			        g_error_free(error);
+			        self->notify_if_stopped();
+			        return;
+		        }
+
+		        // The unit may have stopped before its proxy existed: no active-state change follows
+		        const char * state = unit_unit_get_active_state(unit.get());
+		        if (state and (state == std::string_view("inactive") or state == std::string_view("failed")))
+		        {
+			        self->notify_if_stopped();
 			        return;
 		        }
 
