@@ -26,6 +26,12 @@ paths:
     than a headset retries); evicting young attempts (brings back the junk-burst bug above);
     priority for a claimed known key (the key is sent in clear, so it can be replayed, and a slot
     lasts less than a Wi-Fi round trip).
+- Of the stalled attempts it evicts the longest waiter. The other ordering is no better (XERK-2766):
+  - A person typing the PIN (up to 2 min) is the longest waiter, so 16 stalled LAN peers that keep
+    reconnecting can stop pairing; paired headsets (~0.15 s) are unaffected. Accepted as LAN risk.
+  - Evicting the newest staller failed QA: a person who joins a pool already full of stallers is
+    then the newest, so it made pairing easier to block than the current rule.
+  - Exempting PIN waiters can't work either: attackers reach the PIN step too.
 - Keep the `handshake_gate` open until a handshake fully succeeds; closing it drops every peer
   queued in it, including a headset that already sent its handshake.
 - Wrong PINs are throttled by `pin_throttle`, never by delaying the listener: paired headsets must
