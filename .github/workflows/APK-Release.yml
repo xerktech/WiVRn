@@ -1,29 +1,50 @@
 name: Release APK Only
 
+# xerktech fork: publish a signed Quest APK built from this repository's own
+# commit, so the headset speaks the same protocol (AEAD revision, pinned server
+# key) as a wivrn-server built from that commit. See docs/xerktech-quest.md.
 on:
   push:
     branches: [ "master" ]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Commit SHA (or branch/tag) to build and release'
+        required: true
 
-env:
-  BUILD_TYPE: RelWithDebInfo
+permissions:
+  contents: read
+
+# Per commit: a push and a dispatch of the same commit cannot race on one
+# release, while runs for different commits are never cancelled.
+concurrency:
+  group: apk-release-${{ inputs.ref || github.sha }}
+  cancel-in-progress: false
 
 jobs:
   build-android-only:
     name: Android
     runs-on: ubuntu-24.04
-    if: ${{ vars.APK_ONLY != '' }}
-
-    strategy:
-      matrix:
-        buildtype: ['Release', 'Debug', 'DebugWithValidationLayer']
+    outputs:
+      sha: ${{ steps.rev.outputs.sha }}
+      version: ${{ steps.rev.outputs.version }}
 
     steps:
     - uses: actions/checkout@v6
       with:
-        # Checkout from upstream instead of WiVRn-APK to ensure the GIT_DESC variable is set correctly
-        repository: 'WiVRn/WiVRn'
-        ref: ${{ github.sha }}
+        ref: ${{ inputs.ref || github.sha }}
+        # Full history and tags so git describe gives a meaningful version.
         fetch-depth: 0
+        fetch-tags: true
+
+    # This workflow's own apk-<sha> release tags would otherwise win in
+    # git describe (here and in cmake/GitVersion.cmake).
+    - name: Resolve commit
+      id: rev
+      run: |
+        git tag -l 'apk-*' | xargs -r git tag -d
+        echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        echo "version=$(git describe --tags --always | sed 's/^v\([0-9]\)/\1/')" >> "$GITHUB_OUTPUT"
 
     # Gradle distribution and the Android plugin's dependencies.
     - uses: actions/cache@v5
@@ -41,96 +62,73 @@ jobs:
         sudo dpkg --install KTX-Software-4.4.0-Linux-x86_64.deb
         npm install --global @gltf-transform/cli@4.1.1
 
-    - name: Check for Secret availability
-      id: secret-check
-      shell: bash
-      run: |
-        if [[ "${{ secrets.APK_SIGNINGKEYPASSWORD }}" != '' && "${{ secrets.APK_KEYSTORE_BASE64 }}" != '' ]]; then
-          echo "available=true" >> $GITHUB_OUTPUT;
-        else
-          echo "available=false" >> $GITHUB_OUTPUT;
-        fi
-
-    - name: Secrets
-      if: ${{ github.event_name != 'pull_request' && steps.secret-check.outputs.available == 'true' }}
+    # An unsigned APK cannot be installed, so never publish one.
+    - name: Signing key
       env:
         APK_SIGNINGKEYPASSWORD: ${{ secrets.APK_SIGNINGKEYPASSWORD }}
         APK_KEYSTORE_BASE64: ${{ secrets.APK_KEYSTORE_BASE64 }}
       run: |
+        if [[ -z "$APK_SIGNINGKEYPASSWORD" || -z "$APK_KEYSTORE_BASE64" ]]; then
+          echo "::error::APK_SIGNINGKEYPASSWORD / APK_KEYSTORE_BASE64 secrets are not set"
+          exit 1
+        fi
         echo signingKeyPassword="$APK_SIGNINGKEYPASSWORD" > gradle.properties
         echo "$APK_KEYSTORE_BASE64" | base64 --decode --ignore-garbage > ks.keystore
 
     - name: Build
+      env:
+        VERSION: ${{ steps.rev.outputs.version }}
       run: |
         chmod +x gradlew
-        ./gradlew -Psuffix=".github.nightly" -Pwivrn_css=images/wivrn-nightly.css -Pwivrn_app_name="WiVRn Nightly" -Pwivrn_compress_glb=ON assemble${{ matrix.buildtype }}
+        ./gradlew \
+          -Pwivrn_version="$VERSION" \
+          -Pwivrn_versionCode="$(git rev-list --count HEAD)" \
+          -Psuffix=".xerktech" \
+          -Pwivrn_css=images/wivrn-nightly.css \
+          -Pwivrn_app_name="WiVRn XerkTech" \
+          -Pwivrn_compress_glb=ON \
+          assembleRelease
 
-    - name: Prepare before archiving artifacts
+    - name: Verify signature
       run: |
+        APK=$(find build/outputs/apk/ -name "*.apk")
+        BUILD_TOOLS=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 | sort -V | tail -1)
+        "$BUILD_TOOLS/apksigner" verify --print-certs "$APK"
         mkdir apk
-        mv $(find build/outputs/apk/ -name "*.apk") apk/
-        mkdir debug
-        mv build/intermediates/merged_native_libs/*/*/out/lib/* debug/
-        find debug -name libopenxr_loader.so -delete
+        mv "$APK" apk/wivrn-xerktech-${{ steps.rev.outputs.sha }}.apk
 
     - name: Archive APK
       uses: actions/upload-artifact@v7
       with:
-        name: apk-${{ (github.event_name == 'pull_request' && matrix.buildtype == 'Release') && 'Release-unsigned' || matrix.buildtype }}
+        name: apk
         path: apk/*.apk
-        retention-days: 7
-
-    - name: Archive debug symbols
-      if: ${{ matrix.buildtype != 'Release' }}
-      uses: actions/upload-artifact@v7
-      with:
-        name: symbols-${{ matrix.buildtype }}
-        path: debug/**/*.so
         retention-days: 7
 
   release:
     name: Create APK release
     runs-on: ubuntu-24.04
     needs: build-android-only
-    if: ${{ vars.APK_ONLY != '' }}
+    permissions:
+      contents: write
 
     steps:
-    - name: Download APK artifacts
+    - name: Download APK artifact
       uses: actions/download-artifact@v8
       with:
+        name: apk
         path: apk
-        pattern: 'apk-*'
-        merge-multiple: true
-
-    - name: Rename APK artifacts
-      run: |
-        cd apk
-        for f in *.apk; do
-          BASENAME=`echo ${f}|awk -F '-APK-' '{print $2}'`
-          mv "${f}" "org.meumeu.wivrn-${BASENAME}"
-        done
-
-    - name: Download APK debug artifacts
-      uses: actions/download-artifact@v8
-      with:
-        path: symbols
-        pattern: 'symbols-*'
-        merge-multiple: false
-
-    - name: Zip APK debug artifacts
-      run: |
-        cd symbols
-        zip -r ../debug-symbols.zip .
 
     - name: APK Release
       uses: softprops/action-gh-release@v3
       with:
-        token: ${{ secrets.DOWNSTREAM_GITHUB_TOKEN }}
-        tag_name: "apk-${{ github.sha }}"
-        generate_release_notes: true
+        tag_name: "apk-${{ needs.build-android-only.outputs.sha }}"
+        target_commitish: ${{ needs.build-android-only.outputs.sha }}
+        name: "Quest APK ${{ needs.build-android-only.outputs.version }}"
+        body: |
+          Signed Quest client built from ${{ needs.build-android-only.outputs.sha }}.
+          Only connects to a wivrn-server built from this same commit.
+          Install: docs/xerktech-quest.md.
         draft: false
         prerelease: false
         fail_on_unmatched_files: true
-        files: |
-          apk/*.apk
-          debug-symbols.zip
+        files: apk/*.apk
