@@ -973,9 +973,9 @@ void settings_theme(const settings_context & ctx)
 
 		// global font scale, 100% is the design default
 		static const int font_scale_default = 100;
-		int font_scale = int(theme.font_scale * 100);
+		int font_scale = int(std::lround(theme.font_scale * 100));
 		ui::setting_label(_cS("setting name", "Text size"), _cS("setting description", "Global font scale"), control_w);
-		if (ui::slider_int("##font_scale", &font_scale, 60, 140, "%d%%", {control_w, 0}, &font_scale_default))
+		if (ui::slider_int("##font_scale", &font_scale, int(std::lround(configuration::theme_font_scale_min * 100)), int(std::lround(configuration::theme_font_scale_max * 100)), "%d%%", {control_w, 0}, &font_scale_default))
 		{
 			theme.font_scale = float(font_scale) / 100.f;
 			config.theme_font_scale = theme.font_scale;

@@ -23,6 +23,7 @@
 #include "utils/json_string.h"
 #include "wivrn_packets.h"
 
+#include <algorithm>
 #include <fstream>
 #include <functional>
 #include <magic_enum.hpp>
@@ -262,6 +263,9 @@ configuration::configuration(xr::system & system, xr::session & session, const s
 
 		for (const auto & f: config_fields())
 			f.load(root, *this);
+
+		// a hand-edited or corrupted config must not size the UI outside the slider's range
+		theme_font_scale = std::clamp(theme_font_scale, theme_font_scale_min, theme_font_scale_max);
 
 		// refresh rate must be supported by this headset, otherwise fall back to the default
 		const auto & rates = session.get_refresh_rates();

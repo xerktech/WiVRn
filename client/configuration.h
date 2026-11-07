@@ -102,6 +102,10 @@ public:
 	float theme_rounding = 8;
 	float theme_card_rounding = 14;
 	float theme_font_scale = 1.0;
+	// font scale range offered by the settings slider; a loaded value is clamped to it,
+	// since fixed-size lobby layouts are only laid out for this range
+	static constexpr float theme_font_scale_min = 0.6;
+	static constexpr float theme_font_scale_max = 1.4;
 	float theme_background_alpha = 0.75;
 
 	// XR_FB_composition_layer_settings extension flags
