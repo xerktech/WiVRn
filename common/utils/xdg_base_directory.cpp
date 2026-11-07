@@ -21,62 +21,82 @@
 #include <cstdlib>
 #include <filesystem>
 
-std::filesystem::path xdg_config_home()
+namespace
 {
-	if (const char * xdg_config_home = std::getenv("XDG_CONFIG_HOME"))
-		return xdg_config_home;
+// Per the XDG base directory spec, a variable that is unset, empty or holds a relative path is
+// ignored. Monado's u_file_get_runtime_dir applies the same rule (patches/monado/0014), so the
+// IPC socket and WiVRn's own files agree on where things live.
+const char * absolute_env(const char * name)
+{
+	const char * value = std::getenv(name);
+	if (value == nullptr or value[0] != '/')
+		return nullptr;
+	return value;
+}
 
-	if (const char * home = std::getenv("HOME"))
-		return std::filesystem::path(home) / ".config";
+std::filesystem::path home_subdir(const char * subdir)
+{
+	if (const char * home = absolute_env("HOME"))
+		return std::filesystem::path(home) / subdir;
 
 	return ".";
+}
+
+// Colon-separated list: relative entries are ignored, and so is a list with no usable entry.
+std::vector<std::filesystem::path> path_list(const char * name, std::vector<std::filesystem::path> fallback)
+{
+	std::vector<std::filesystem::path> paths;
+	if (const char * value = std::getenv(name))
+	{
+		for (const auto & path: utils::split(value, ":"))
+		{
+			if (path.starts_with('/'))
+				paths.push_back(path);
+		}
+	}
+
+	if (paths.empty())
+		return fallback;
+	return paths;
+}
+} // namespace
+
+std::filesystem::path xdg_config_home()
+{
+	if (const char * xdg_config_home = absolute_env("XDG_CONFIG_HOME"))
+		return xdg_config_home;
+
+	return home_subdir(".config");
 }
 
 std::filesystem::path xdg_cache_home()
 {
-	if (const char * xdg_cache_home = std::getenv("XDG_CACHE_HOME"))
+	if (const char * xdg_cache_home = absolute_env("XDG_CACHE_HOME"))
 		return xdg_cache_home;
 
-	if (const char * home = std::getenv("HOME"))
-		return std::filesystem::path(home) / ".cache";
-
-	return ".";
+	return home_subdir(".cache");
 }
 
 std::filesystem::path xdg_data_home()
 {
-	if (const char * xdg_data_home = std::getenv("XDG_DATA_HOME"); xdg_data_home and *xdg_data_home)
+	if (const char * xdg_data_home = absolute_env("XDG_DATA_HOME"))
 		return xdg_data_home;
 
-	if (const char * home = std::getenv("HOME"))
-		return std::filesystem::path(home) / ".local/share";
-
-	return ".";
+	return home_subdir(".local/share");
 }
 
 std::filesystem::path xdg_runtime_dir()
 {
-	if (const char * xdg_runtime_dir = std::getenv("XDG_RUNTIME_DIR"); xdg_runtime_dir and *xdg_runtime_dir)
+	if (const char * xdg_runtime_dir = absolute_env("XDG_RUNTIME_DIR"))
 		return xdg_runtime_dir;
 
+	// tools/perfetto/wivrn_capture.py and docs/profiling.md rely on this fallback
 	return "/tmp";
 }
 
 std::vector<std::filesystem::path> xdg_config_dirs()
 {
-	std::vector<std::filesystem::path> paths;
-
-	if (const char * xdg_config_dirs = std::getenv("XDG_CONFIG_DIRS"))
-	{
-		for (const auto & path: utils::split(xdg_config_dirs, ":"))
-			paths.push_back(path);
-	}
-	else
-	{
-		paths.push_back("/etc/xdg");
-	}
-
-	return paths;
+	return path_list("XDG_CONFIG_DIRS", {"/etc/xdg"});
 }
 
 std::vector<std::filesystem::path> xdg_data_dirs(bool include_data_home)
@@ -85,16 +105,8 @@ std::vector<std::filesystem::path> xdg_data_dirs(bool include_data_home)
 	if (include_data_home)
 		paths.push_back(xdg_data_home());
 
-	if (const char * xdg_config_dirs = std::getenv("XDG_DATA_DIRS"))
-	{
-		for (const auto & path: utils::split(xdg_config_dirs, ":"))
-			paths.push_back(path);
-	}
-	else
-	{
-		paths.push_back("/usr/local/share");
-		paths.push_back("/usr/share");
-	}
+	for (auto & path: path_list("XDG_DATA_DIRS", {"/usr/local/share", "/usr/share"}))
+		paths.push_back(std::move(path));
 
 	return paths;
 }

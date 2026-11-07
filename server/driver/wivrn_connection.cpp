@@ -19,6 +19,7 @@
 
 #include "wivrn_connection.h"
 #include "configuration.h"
+#include "handshake_identity.h"
 #include "protocol_version.h"
 #include "secrets.h"
 #include "smp.h"
@@ -205,19 +206,9 @@ void wivrn::wivrn_connection::init(std::stop_token stop_token, std::function<voi
 			// Generate an ephemeral key pair just for exchanging the AES key
 			crypto::key server_key = crypto::key::generate_x448_keypair();
 			// Long-term key the headset pins at pairing, so it can tell this server from an impostor
-			crypto::key identity_key;
-			try
-			{
-				identity_key = wivrn::server_identity_key();
-			}
-			catch (...)
-			{
-				// Tell the headset why, otherwise it only sees the connection drop
-				control.send(to_headset::crypto_handshake{
-				        .state = to_headset::crypto_handshake::crypto_state::server_key_error,
-				});
-				throw;
-			}
+			crypto::key identity_key = wivrn::identity_key_or_notify(
+			        wivrn::server_identity_key,
+			        [&](auto && packet) { control.send(std::forward<decltype(packet)>(packet)); });
 
 			control.send(to_headset::crypto_handshake{
 			        .public_key = server_key.public_key(),

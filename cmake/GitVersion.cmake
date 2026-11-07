@@ -16,7 +16,17 @@ endif()
 
 if (GIT_TAG)
 	set(GIT_DESC "${GIT_TAG}")
-	set(GIT_COMMIT "${GIT_TAG}")
+	# xerktech fork: the dashboard fetches the APK by commit (release apk-<sha>), even for a
+	# tagged build, so use the commit when .git can tell it, the tag name otherwise.
+	execute_process(
+		COMMAND ${GIT_EXECUTABLE} rev-parse HEAD
+		OUTPUT_VARIABLE GIT_COMMIT
+		OUTPUT_STRIP_TRAILING_WHITESPACE
+		ERROR_QUIET
+	)
+	if (NOT GIT_COMMIT)
+		set(GIT_COMMIT "${GIT_TAG}")
+	endif()
 	set(GIT_TAG true)
 
 	message(STATUS "Building for git tag ${GIT_DESC}")

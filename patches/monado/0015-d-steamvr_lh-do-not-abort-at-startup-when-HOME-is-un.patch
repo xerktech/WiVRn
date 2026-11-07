@@ -1,0 +1,42 @@
+From 2ffd4cb94b76d3c9bdcac7cdf20c7355fc7b2fc0 Mon Sep 17 00:00:00 2001
+From: Malcolm Habeeb <malcolm@tesoroxp.com>
+Date: Sat, 7 Nov 2026 00:14:38 -0500
+Subject: [PATCH] d/steamvr_lh: do not abort at startup when HOME is unset
+
+STEAM_INSTALL_DIR was built during static initialisation from
+std::string(getenv("HOME")), which throws std::logic_error for a null
+pointer, so every program linking the driver (wivrn-server included)
+aborted before main when HOME was unset. Treat an unset or relative
+HOME as "Steam not found" instead.
+---
+ src/xrt/drivers/steamvr_lh/steamvr_lh.cpp | 14 +++++++++++++-
+ 1 file changed, 13 insertions(+), 1 deletion(-)
+
+diff --git a/src/xrt/drivers/steamvr_lh/steamvr_lh.cpp b/src/xrt/drivers/steamvr_lh/steamvr_lh.cpp
+index 54ab0990c..5340c48a7 100644
+--- a/src/xrt/drivers/steamvr_lh/steamvr_lh.cpp
++++ b/src/xrt/drivers/steamvr_lh/steamvr_lh.cpp
+@@ -88,7 +88,19 @@ static constexpr size_t MAX_CONTROLLERS = 16;
+ 
+ 
+ // ~/.steam/root is a symlink to where the Steam root is
+-const std::string STEAM_INSTALL_DIR = std::string(getenv("HOME")) + "/.steam/root";
++std::string
++get_steam_install_dir()
++{
++	// Runs during static initialisation: constructing a std::string from a null HOME would
++	// abort every program linking this driver before main. Without HOME, Steam is not found.
++	const char *home = getenv("HOME");
++	if (home == nullptr || home[0] != '/') {
++		return std::string();
++	}
++	return std::string(home) + "/.steam/root";
++}
++
++const std::string STEAM_INSTALL_DIR = get_steam_install_dir();
+ constexpr auto STEAMVR_APPID = "250820";
+ 
+ // Parse libraryfolder.vdf to find where SteamVR is installed
+-- 
+2.43.0
+

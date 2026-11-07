@@ -42,10 +42,6 @@ Kirigami.ScrollablePage {
         }
     }
 
-    property bool is_tagged: ApkInstaller.isTagged
-    property bool is_latest: ApkInstaller.currentVersion == ApkInstaller.latestVersion
-    property bool checking_newer: ApkInstaller.latestVersion == "" && ApkInstaller.isTagged
-    property bool newer_version: ApkInstaller.currentVersion != ApkInstaller.latestVersion && ApkInstaller.latestVersion != "" && ApkInstaller.isTagged
 
     ConnectUsbDialog {
         id: select_usb_device
@@ -139,49 +135,11 @@ Kirigami.ScrollablePage {
             Controls.Label {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
-                text: i18n("In order to use WiVRn, you will have to install the client app on your headset.\nYou can either install it from the Meta store or directly over USB.")
+                text: i18n("In order to use WiVRn, you will have to install the client app on your headset over USB.\nThe Meta store app is not compatible with this server.")
             }
 
             Controls.Label {
                 Layout.topMargin: 4 * Kirigami.Units.largeSpacing
-                font.pointSize: Kirigami.Theme.defaultFont.pointSize * 1.35
-                text: i18n("Install from the Meta store")
-            }
-            BetterLabel {
-                Layout.fillWidth: true
-                text: i18n("For the Quest 2, 3, 3S, and Pro, you can get the app from the <a href=\"https://www.meta.com/experiences/7959676140827574/\">Meta store</a>.")
-            }
-            Controls.Label {
-                Layout.fillWidth: true
-                wrapMode: Text.WordWrap
-                text: i18n("Checking latest release...")
-                visible: wizard.checking_newer
-            }
-
-            Controls.Label {
-                Layout.fillWidth: true
-                wrapMode: Text.WordWrap
-                text: i18n("A newer release is available: %1 → %2, the client app on the Meta store may not be compatible.", ApkInstaller.currentVersion, ApkInstaller.latestVersion)
-                visible: wizard.newer_version
-            }
-
-            Controls.Label {
-                Layout.fillWidth: true
-                wrapMode: Text.WordWrap
-                text: i18n("This is a nightly build, the client app on the Meta store may not be compatible.")
-                visible: !wizard.is_tagged
-            }
-
-            Controls.Label {
-                font.pointSize: Kirigami.Theme.defaultFont.pointSize * 1.5
-                Layout.topMargin: 4 * Kirigami.Units.largeSpacing
-                Layout.bottomMargin: 4 * Kirigami.Units.largeSpacing
-                Layout.preferredWidth: 20 * Kirigami.Units.largeSpacing
-                horizontalAlignment: Qt.AlignHCenter
-                text: i18nc("displayed between 'meta store' and 'install over USB' in the wizard", "Or")
-            }
-
-            Controls.Label {
                 Layout.bottomMargin: 2 * Kirigami.Units.largeSpacing
                 font.pointSize: Kirigami.Theme.defaultFont.pointSize * 1.35
                 text: i18n("Install over USB")

@@ -49,6 +49,9 @@ if (WIVRN_BUILD_DASHBOARD OR WIVRN_BUILD_SERVER)
 
         target_link_libraries(list-apps wivrn-common-server)
 
+        add_executable(test-xdg-base-directory test_xdg_base_directory.cpp)
+        target_link_libraries(test-xdg-base-directory wivrn-common-base)
+
         add_executable(vdf utils/vdf.cpp)
         target_compile_definitions(vdf PRIVATE WIVRN_BUILD_TEST)
         target_link_libraries(vdf Boost::iostreams)
