@@ -608,6 +608,11 @@ gboolean control_received(gint fd, GIOCondition condition, gpointer user_data)
 			                   inhibitor.reset();
 			                   wivrn_server_set_headset_connected(dbus_server, false);
 			                   wivrn_server_set_client_tab(dbus_server, "");
+			                   wivrn_server_set_headset_focused(dbus_server, false);
+		                   },
+		                   [&](const from_monado::app_activity & a) {
+			                   wivrn_server_set_app_frames_delivered(dbus_server, a.frames_delivered);
+			                   wivrn_server_set_headset_focused(dbus_server, a.headset_focused);
 		                   },
 		                   [&](const wivrn::from_headset::stream_tab_changed & event) {
 			                   wivrn_server_set_client_tab(dbus_server, magic_enum::enum_name(event.tab).data());

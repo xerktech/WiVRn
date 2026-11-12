@@ -1110,6 +1110,9 @@ void wivrn_session::run_net(std::stop_token stop)
 void wivrn_session::run_worker(std::stop_token stop)
 {
 	refresh_rate_adjuster refresh(get_info(), settings, app_pacers);
+	// Report app activity to the main loop for D-Bus (XERK-2844).
+	const std::chrono::seconds activity_period{2};
+	auto activity_next = std::chrono::steady_clock::now();
 	while (not stop.stop_requested())
 	{
 		try
@@ -1119,8 +1122,17 @@ void wivrn_session::run_worker(std::stop_token stop)
 			                refresh.next,
 			                control.next,
 			                offset_est.next(),
+			                activity_next,
 			        }));
 			auto now = std::chrono::steady_clock::now();
+			if (activity_next <= now)
+			{
+				activity_next = now + activity_period;
+				send_to_main(from_monado::app_activity{
+				        .frames_delivered = app_pacers.get_frames_delivered(),
+				        .headset_focused = headset_focused,
+				});
+			}
 			offset_est.request_sample(now, *connection);
 			const bool do_refresh = refresh.advance(now);
 			const bool do_control = control.advance(now);
@@ -1367,6 +1379,7 @@ void wivrn_session::stop_application(std::optional<uint32_t> id, int64_t timeout
 
 void wivrn_session::update_client_states(bool visible, bool focused)
 {
+	headset_focused = focused;
 	assert(mnd_ipc_server);
 	scoped_lock lock(mnd_ipc_server->global_state.lock);
 	auto locked = session_loss.lock();
