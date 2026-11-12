@@ -280,6 +280,8 @@ class lobby : public scene_impl<lobby>
 		std::string status;
 		std::string code; // pairing code to show, once known
 		std::string url;  // where to enter it, if the server said
+		// pairing: the hex key /pair saw, saved as pending before the code can be entered
+		std::string server_key;
 	};
 	struct fenrir_result
 	{

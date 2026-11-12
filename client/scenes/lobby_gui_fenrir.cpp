@@ -28,6 +28,7 @@
 #include "utils/i18n.h"
 
 #include "IconsFontAwesome7.h"
+#include <algorithm>
 #include <chrono>
 #include <spdlog/fmt/fmt.h>
 #include <spdlog/spdlog.h>
@@ -87,6 +88,31 @@ scenes::lobby::fenrir_result load(token_t & token, const fenrir::server & srv)
 	return r;
 }
 
+// The pinned key, else the pending one, if a pinned GET /apps to it succeeds
+std::optional<std::array<uint8_t, 32>> recover_pairing(token_t & token, fenrir::server srv)
+{
+	for (const std::string * hex: {&srv.server_key_sha256, &srv.pending_server_key_sha256})
+	{
+		if (hex->empty() or token.is_cancelled())
+			continue;
+		auto key = fenrir::from_hex(*hex);
+		if (not key or key->size() != 32)
+			continue;
+		fenrir::server check = srv;
+		check.server_key_sha256 = *hex;
+		try
+		{
+			fenrir::client{check, cancel_flag(token)}.apps();
+			std::array<uint8_t, 32> r;
+			std::ranges::copy(*key, r.begin());
+			return r;
+		}
+		catch (fenrir::api_error &)
+		{}
+	}
+	return std::nullopt;
+}
+
 scenes::lobby::fenrir_result pair(token_t & token, fenrir::server srv, std::string wivrn_key, std::string name)
 {
 	fenrir::client c{srv, cancel_flag(token)};
@@ -106,6 +132,14 @@ scenes::lobby::fenrir_result pair(token_t & token, fenrir::server srv, std::stri
 		}
 		catch (fenrir::api_error & e)
 		{
+			if (e.status == 409)
+			{
+				// Already paired: an earlier pairing completed on fenrir but the app stopped
+				// before saving it. Adopt the key that pairing saw, once a pinned call proves it.
+				if (auto key = recover_pairing(token, srv))
+					return {.server_key = *key};
+				throw;
+			}
 			if ((e.status != 429 and e.status != 503) or attempt >= 20)
 				throw;
 			token.set_progress({.status = _("The server is busy pairing, waiting for a turn")});
@@ -115,7 +149,7 @@ scenes::lobby::fenrir_result pair(token_t & token, fenrir::server srv, std::stri
 	}
 
 	auto code = fenrir::pairing_code(reply.server_key, fenrir::certificate_key_sha256(srv.tls_cert), wivrn_key, reply.server_nonce, nonce);
-	token.set_progress({.status = _("Waiting for the code to be entered"), .code = code, .url = reply.pairing_url});
+	token.set_progress({.status = _("Waiting for the code to be entered"), .code = code, .url = reply.pairing_url, .server_key = fenrir::to_hex(reply.server_key)});
 
 	try
 	{
@@ -269,6 +303,19 @@ void scenes::lobby::fenrir_start(fenrir_op_kind kind, std::string app_id)
 
 void scenes::lobby::fenrir_poll()
 {
+	// Save the key /pair saw before the code can be entered: if the app dies after fenrir pairs
+	// but before the result below is saved, the next pairing's 409 can still be recovered
+	if (fenrir_op.valid() and fenrir_op_running == fenrir_op_kind::pairing)
+	{
+		fenrir::server * srv = fenrir_server();
+		std::string key = fenrir_op.get_progress().server_key;
+		if (srv and not key.empty() and srv->pending_server_key_sha256 != key)
+		{
+			srv->pending_server_key_sha256 = key;
+			fenrir_save();
+		}
+	}
+
 	if (not fenrir_op.valid() or fenrir_op.poll() != utils::future_status::ready)
 		return;
 
@@ -288,6 +335,7 @@ void scenes::lobby::fenrir_poll()
 
 			case fenrir_op_kind::pairing:
 				srv->server_key_sha256 = fenrir::to_hex(r.server_key);
+				srv->pending_server_key_sha256.clear();
 				srv->paired = true;
 				fenrir_save();
 				fenrir_start(fenrir_op_kind::loading);
