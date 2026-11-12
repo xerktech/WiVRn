@@ -25,6 +25,9 @@
 #include "lobby.h"
 #include "render/ui_theme.h"
 #include "render/ui_widgets.h"
+#ifdef __ANDROID__
+#include "android/permissions.h"
+#endif
 #include "utils/i18n.h"
 
 #include "IconsFontAwesome7.h"
@@ -418,10 +421,157 @@ void scenes::lobby::fenrir_poll()
 	}
 }
 
+void scenes::lobby::fenrir_add_server(std::string name, std::string host, int port, std::string server_key_sha256)
+{
+	if (not fenrir_store)
+		return;
+	try
+	{
+		auto identity = fenrir::make_tls_identity();
+		fenrir::server srv{
+		        .id = fenrir::random_id(),
+		        .name = name.empty() ? host : std::move(name),
+		        .host = std::move(host),
+		        .port = port,
+		        .tls_key = std::move(identity.key),
+		        .tls_cert = std::move(identity.cert),
+		        .server_key_sha256 = std::move(server_key_sha256),
+		};
+		fenrir_current = srv.id;
+		fenrir_store->servers.push_back(std::move(srv));
+		fenrir_save();
+		fenrir_apps.clear();
+		fenrir_session.reset();
+		fenrir_clear_covers();
+		fenrir_start(fenrir_op_kind::pairing);
+	}
+	catch (std::exception & e)
+	{
+		spdlog::error("fenrir: cannot create the TLS identity: {}", e.what());
+		fenrir_error = fenrir::api_error(0, e.what());
+	}
+}
+
+#ifdef __ANDROID__
+void scenes::lobby::fenrir_scan_start()
+{
+	fenrir_scan_error.clear();
+	auto answer = std::make_shared<std::atomic<int>>(0);
+	fenrir_scan_permission = answer;
+	request_permission(qr_scanner::permission, [answer](bool granted) { *answer = granted ? 1 : 2; });
+}
+
+void scenes::lobby::fenrir_scan_stop()
+{
+	fenrir_scan_permission.reset();
+	if (fenrir_scanner)
+	{
+		fenrir_scanner.reset();
+		setup_passthrough();
+	}
+}
+
+// Instead of the address fields while a QR code is being read. Closes the popup once a server is
+// added from the code.
+void scenes::lobby::gui_fenrir_scan()
+{
+	namespace ui = wivrn::ui;
+	const auto & t = ui::current();
+
+	if (fenrir_scan_permission and not fenrir_scanner)
+	{
+		switch (fenrir_scan_permission->load())
+		{
+			case 0:
+				ImGui::TextWrapped("%s", _S("Allow WiVRn to use the headset cameras to read the QR code."));
+				break;
+			case 1:
+				try
+				{
+					fenrir_scanner = std::make_unique<qr_scanner>([](const std::string & text) { return fenrir::parse_pairing_link(text).has_value(); });
+					setup_passthrough();
+				}
+				catch (std::exception & e)
+				{
+					spdlog::warn("fenrir: cannot read QR codes: {}", e.what());
+					fenrir_scan_error = _("This headset's cameras cannot be read. A Quest 3 or 3S with Horizon OS v74 or later is needed: enter the address instead.");
+					fenrir_scan_permission.reset();
+				}
+				break;
+			default:
+				fenrir_scan_error = _("Camera access was refused: enter the address instead.");
+				fenrir_scan_permission.reset();
+				break;
+		}
+	}
+
+	if (fenrir_scanner)
+	{
+		if (auto text = fenrir_scanner->result())
+		{
+			auto link = fenrir::parse_pairing_link(*text);
+			fenrir_scan_stop();
+			fenrir_add_server(fenrir_add_name, link->host, link->port, link->server_key_sha256);
+			ImGui::CloseCurrentPopup();
+			return;
+		}
+		if (auto error = fenrir_scanner->error())
+		{
+			fenrir_scan_stop();
+			fenrir_scan_error = fmt::format(_F("The camera stopped: {}"), *error);
+		}
+		else
+		{
+			ImGui::TextWrapped("%s", _S("Look at the QR code on fenrir's pairing page."));
+			if (fenrir_scanner->saw_other())
+			{
+				ImGui::PushStyleColor(ImGuiCol_Text, t.text_muted);
+				ImGui::TextWrapped("%s", _S("A QR code was seen, but it is not a fenrir pairing code."));
+				ImGui::PopStyleColor();
+			}
+		}
+	}
+}
+#endif
+
 void scenes::lobby::gui_fenrir_add()
 {
 	namespace ui = wivrn::ui;
 	const float w = ImGui::GetContentRegionAvail().x;
+
+#ifdef __ANDROID__
+	const bool scanning = fenrir_scan_permission or fenrir_scanner;
+	if (scanning)
+	{
+		gui_fenrir_scan();
+		if (not fenrir_scan_permission and not fenrir_scanner and fenrir_scan_error.empty())
+			return; // a server was added from the code, the popup is closing
+		ImGui::Dummy({0, 12});
+		const std::string stop_l = _("Cancel");
+		const float stop_w = ui::button_width(stop_l);
+		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - stop_w);
+		if (ui::button(stop_l, ui::button_style::secondary, {stop_w, 0}))
+			fenrir_scan_stop();
+		return;
+	}
+
+	{
+		const std::string scan_l = _("Scan the QR code on fenrir's pairing page");
+		if (ui::button(ICON_FA_QRCODE, scan_l, ui::button_style::secondary, {w, 0}))
+			fenrir_scan_start();
+		if (not fenrir_scan_error.empty())
+		{
+			ImGui::PushStyleColor(ImGuiCol_Text, ui::current().text_muted);
+			ImGui::TextWrapped("%s", fenrir_scan_error.c_str());
+			ImGui::PopStyleColor();
+		}
+		ImGui::Dummy({0, 6});
+		ImGui::PushStyleColor(ImGuiCol_Text, ui::current().text_muted);
+		ImGui::TextUnformatted(_S("Or enter its address:"));
+		ImGui::PopStyleColor();
+		ImGui::Dummy({0, 6});
+	}
+#endif
 
 	ImGui::TextUnformatted(_S("Name"));
 	if (ImGui::IsWindowAppearing())
@@ -450,30 +600,7 @@ void scenes::lobby::gui_fenrir_add()
 	ImGui::BeginDisabled(fenrir_add_host.empty() or fenrir_add_port < 1 or fenrir_add_port > 65535 or not fenrir_store);
 	if (ui::button(pair_l, ui::button_style::primary, {pair_w, 0}))
 	{
-		try
-		{
-			auto identity = fenrir::make_tls_identity();
-			fenrir::server srv{
-			        .id = fenrir::random_id(),
-			        .name = fenrir_add_name.empty() ? fenrir_add_host : fenrir_add_name,
-			        .host = fenrir_add_host,
-			        .port = fenrir_add_port,
-			        .tls_key = std::move(identity.key),
-			        .tls_cert = std::move(identity.cert),
-			};
-			fenrir_current = srv.id;
-			fenrir_store->servers.push_back(std::move(srv));
-			fenrir_save();
-			fenrir_apps.clear();
-			fenrir_session.reset();
-			fenrir_clear_covers();
-			fenrir_start(fenrir_op_kind::pairing);
-		}
-		catch (std::exception & e)
-		{
-			spdlog::error("fenrir: cannot create the TLS identity: {}", e.what());
-			fenrir_error = fenrir::api_error(0, e.what());
-		}
+		fenrir_add_server(fenrir_add_name, fenrir_add_host, fenrir_add_port);
 		ImGui::CloseCurrentPopup();
 	}
 	ImGui::EndDisabled();
@@ -744,6 +871,9 @@ void scenes::lobby::gui_fenrir_servers()
 		fenrir_add_name.clear();
 		fenrir_add_host.clear();
 		fenrir_add_port = 0;
+#ifdef __ANDROID__
+		fenrir_scan_error.clear();
+#endif
 		open_add = true;
 	}
 	ImGui::EndDisabled();
@@ -825,6 +955,11 @@ void scenes::lobby::gui_fenrir_servers()
 		gui_fenrir_add();
 		ui::end_modal();
 	}
+#ifdef __ANDROID__
+	// The add window closed by any way while the camera was on
+	if ((fenrir_scanner or fenrir_scan_permission) and not ImGui::IsPopupOpen("add fenrir server"))
+		fenrir_scan_stop();
+#endif
 
 	if (ui::begin_modal("fenrir", ""))
 	{

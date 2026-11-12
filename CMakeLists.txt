@@ -274,6 +274,8 @@ FetchContent_Declare(entt          EXCLUDE_FROM_ALL SYSTEM URL https://github.co
                                    URL_HASH SHA256=32a2ff2c72cb047dfd57306006ef238820b70da7c6ce4e7e8a507ac63365212e)
 FetchContent_Declare(curl          EXCLUDE_FROM_ALL SYSTEM URL https://github.com/curl/curl/releases/download/curl-8_17_0/curl-8.17.0.tar.xz
                                    URL_HASH SHA256=955f6e729ad6b3566260e8fef68620e76ba3c31acf0a18524416a185acf77992)
+FetchContent_Declare(zxing-cpp     EXCLUDE_FROM_ALL SYSTEM URL https://github.com/zxing-cpp/zxing-cpp/archive/refs/tags/v3.1.1.tar.gz
+                                   URL_HASH SHA256=7286b1e6ade66fe82b7c8208b4595deeb55d6486b410834fdc65702f46650542)
 FetchContent_Declare(spirv-reflect EXCLUDE_FROM_ALL SYSTEM URL https://github.com/KhronosGroup/SPIRV-Reflect/archive/refs/tags/vulkan-sdk-1.4.328.1.tar.gz
                                    URL_HASH SHA256=77f4b5b5630d960d7c17e39ddd5bf2e7dd62e6d8da24259ed14ca5b59783ea35)
 

@@ -46,6 +46,22 @@ if(ANDROID)
     find_library(AAUDIO_LIBRARY NAMES aaudio REQUIRED)
     target_link_libraries(wivrn ${ANDROID_LIBRARY} ${MEDIA_LIBRARY} ${AAUDIO_LIBRARY})
 
+    # QR codes from the passthrough camera (android/qr_scanner.cpp, XERK-2812): the reader for
+    # QR codes alone, no writer
+    find_library(CAMERA_LIBRARY NAMES camera2ndk REQUIRED)
+    block(SCOPE_FOR VARIABLES)
+        set(ZXING_READERS ON)
+        set(ZXING_WRITERS OFF CACHE STRING "" FORCE) # a cache string in zxing-cpp, not an option
+        set(ZXING_C_API OFF)
+        set(ZXING_EXAMPLES OFF)
+        foreach(format AZTEC DATAMATRIX MAXICODE 1D PDF417)
+            set(ZXING_ENABLE_${format} OFF)
+        endforeach()
+        set(BUILD_SHARED_LIBS OFF)
+        FetchContent_MakeAvailable(zxing-cpp)
+    endblock()
+    target_link_libraries(wivrn ${CAMERA_LIBRARY} ZXing::ZXing)
+
     # The OpenXR loader must be dynamically loaded or the Oculus store will refuse it with "Oculus SDK not found or older than 1.0"
     set(DYNAMIC_LOADER ON)
     FetchContent_MakeAvailable(openxr_loader)
