@@ -88,6 +88,33 @@ scenes::lobby::fenrir_result load(token_t & token, const fenrir::server & srv)
 	return r;
 }
 
+// The pinned key, else the pending one, if a pinned GET /apps to it succeeds
+std::optional<std::array<uint8_t, 32>> recover_pairing(token_t & token, fenrir::server srv)
+{
+	for (const std::string * hex: {&srv.server_key_sha256, &srv.pending_server_key_sha256})
+	{
+		if (hex->empty() or token.is_cancelled())
+			continue;
+		auto key = fenrir::from_hex(*hex);
+		if (not key or key->size() != 32)
+			continue;
+		fenrir::server check = srv;
+		check.server_key_sha256 = *hex;
+		try
+		{
+			fenrir::client{check, cancel_flag(token)}.apps();
+			std::array<uint8_t, 32> r;
+			std::ranges::copy(*key, r.begin());
+			return r;
+		}
+		catch (std::exception &)
+		{
+			// Refused, or a reply that does not parse: try the next key
+		}
+	}
+	return std::nullopt;
+}
+
 scenes::lobby::fenrir_result pair(token_t & token, fenrir::server srv, std::string wivrn_key, std::string name)
 {
 	fenrir::client c{srv, cancel_flag(token)};
@@ -107,20 +134,14 @@ scenes::lobby::fenrir_result pair(token_t & token, fenrir::server srv, std::stri
 		}
 		catch (fenrir::api_error & e)
 		{
-			// Already paired on fenrir while this entry says otherwise (cancel racing the
-			// confirm, a lost save): if the pinned key admits this headset, it is paired
-			if (e.status == 409 and not srv.server_key_sha256.empty())
+			if (e.status == 409)
 			{
-				try
-				{
-					c.apps();
-					auto key = *fenrir::from_hex(srv.server_key_sha256); // checked by store::load
-					scenes::lobby::fenrir_result r;
-					std::copy_n(key.begin(), r.server_key.size(), r.server_key.begin());
-					return r;
-				}
-				catch (fenrir::api_error &)
-				{}
+				// Already paired on fenrir while this entry says otherwise (cancel racing the
+				// confirm, a lost save, the app dying before it): adopt the pinned key, else the
+				// key the last /pair saw, once a pinned call to it admits this headset
+				if (auto key = recover_pairing(token, srv))
+					return {.server_key = *key};
+				throw;
 			}
 			if ((e.status != 429 and e.status != 503) or attempt >= 20)
 				throw;
@@ -131,7 +152,7 @@ scenes::lobby::fenrir_result pair(token_t & token, fenrir::server srv, std::stri
 	}
 
 	auto code = fenrir::pairing_code(reply.server_key, fenrir::certificate_key_sha256(srv.tls_cert), wivrn_key, reply.server_nonce, nonce);
-	token.set_progress({.status = _("Waiting for the code to be entered"), .code = code, .url = fenrir::pairing_url_to_show(srv, reply.pairing_url)});
+	token.set_progress({.status = _("Waiting for the code to be entered"), .code = code, .url = fenrir::pairing_url_to_show(srv, reply.pairing_url), .server_key = fenrir::to_hex(reply.server_key)});
 
 	try
 	{
@@ -148,8 +169,9 @@ scenes::lobby::fenrir_result pair(token_t & token, fenrir::server srv, std::stri
 		{
 			check.apps();
 		}
-		catch (fenrir::api_error &)
+		catch (std::exception &)
 		{
+			// Refused, or a reply that does not parse: report the confirm's own error
 			throw e;
 		}
 	}
@@ -294,6 +316,19 @@ void scenes::lobby::fenrir_start(fenrir_op_kind kind, std::string app_id)
 
 void scenes::lobby::fenrir_poll()
 {
+	// Save the key /pair saw before the code can be entered: if the app dies after fenrir pairs
+	// but before the result below is saved, the next pairing's 409 can still be recovered
+	if (fenrir_op.valid() and fenrir_op_running == fenrir_op_kind::pairing)
+	{
+		fenrir::server * srv = fenrir_server();
+		std::string key = fenrir_op.get_progress().server_key;
+		if (srv and not key.empty() and srv->pending_server_key_sha256 != key)
+		{
+			srv->pending_server_key_sha256 = key;
+			fenrir_save();
+		}
+	}
+
 	if (not fenrir_op.valid() or fenrir_op.poll() != utils::future_status::ready)
 		return;
 
@@ -312,13 +347,15 @@ void scenes::lobby::fenrir_poll()
 				break;
 
 			case fenrir_op_kind::pairing:
-				// Nothing pinned before this pairing: whoever answered may not be fenrir. Pin
-				// only once the user matched the key with fenrir's pairing page.
+				// Nothing pinned before this pairing (a 409 recovery of the pending key included):
+				// whoever answered may not be fenrir. Pin only once the user matched the key with
+				// fenrir's pairing page.
 				if (fenrir::finish_pairing(*srv) == fenrir::pairing_outcome::check_key)
 				{
 					fenrir_key_check = r.server_key;
 					break;
 				}
+				srv->pending_server_key_sha256.clear();
 				// Keep the save error on screen: the pairing would be lost at restart
 				if (fenrir_save())
 					fenrir_start(fenrir_op_kind::loading);
@@ -556,6 +593,12 @@ void scenes::lobby::gui_fenrir_window()
 			case 0:
 				fenrir_key_check.reset();
 				fenrir_key_rejected = true;
+				// Never offer a rejected key again through the 409 recovery
+				if (not srv->pending_server_key_sha256.empty())
+				{
+					srv->pending_server_key_sha256.clear();
+					fenrir_save();
+				}
 				break;
 			case 1:
 				fenrir::accept_key(*srv, *fenrir_key_check);
