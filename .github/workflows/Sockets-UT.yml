@@ -38,12 +38,13 @@ jobs:
         common/crypto.cpp common/smp.cpp common/secrets.cpp -lssl -lcrypto -o authenticate_ut
     - name: Run authenticate_ut
       run: ./authenticate_ut
-    # fenrir front door client (XERK-2809): pairing code, TLS identity, fenrir.json store
+    # fenrir front door client (XERK-2809): pairing code, TLS identity, fenrir.json store,
+    # and a fake front door that must not get pinned without the user (XERK-2816)
     - name: Build fenrir_ut (ASan/UBSan)
       run: |
         sudo apt-get install -y libcurl4-openssl-dev libsimdjson-dev
         g++ -std=c++23 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined \
           -Icommon -Iclient client/tests/fenrir_ut.cpp client/fenrir.cpp client/utils/json_string.cpp \
-          common/identity.cpp common/crypto.cpp -lsimdjson -lcurl -lssl -lcrypto -o fenrir_ut
+          common/identity.cpp common/crypto.cpp -pthread -lsimdjson -lcurl -lssl -lcrypto -o fenrir_ut
     - name: Run fenrir_ut
       run: ./fenrir_ut

@@ -19,13 +19,22 @@
 
 #include "../fenrir.h"
 
+#include <arpa/inet.h>
+#include <atomic>
+#include <cctype>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <netinet/in.h>
+#include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
+#include <openssl/ssl.h>
 #include <openssl/x509.h>
+#include <sys/socket.h>
+#include <thread>
 #include <unistd.h>
 
 namespace
@@ -243,6 +252,190 @@ void test_store(const std::filesystem::path & dir)
 		}
 	CHECK(backups == 1);
 }
+// A fake front door, as a LAN spoofer would run it: any key, a random nonce for /pair, and 200 for
+// /pair/confirm at once (it knows every input of the code, so it can always "confirm").
+class fake_front_door
+{
+	SSL_CTX * ctx = nullptr;
+	int fd = -1;
+	std::thread thread;
+
+	static std::string read_request(SSL * ssl)
+	{
+		std::string req;
+		char buf[4096];
+		size_t need = std::string::npos;
+		while (need == std::string::npos or req.size() < need)
+		{
+			int n = SSL_read(ssl, buf, sizeof(buf));
+			if (n <= 0)
+				break;
+			req.append(buf, n);
+			if (need == std::string::npos)
+			{
+				auto end = req.find("\r\n\r\n");
+				if (end == std::string::npos)
+					continue;
+				size_t length = 0;
+				std::string lower = req.substr(0, end);
+				for (char & c: lower)
+					c = std::tolower((unsigned char)c);
+				if (auto cl = lower.find("content-length:"); cl != std::string::npos)
+					length = std::stoul(lower.substr(cl + 15));
+				need = end + 4 + length;
+			}
+		}
+		return req;
+	}
+
+	void serve(int conn)
+	{
+		SSL * ssl = SSL_new(ctx);
+		SSL_set_fd(ssl, conn);
+		if (SSL_accept(ssl) == 1)
+		{
+			std::string req = read_request(ssl);
+			std::string body;
+			int status = 404;
+			if (req.starts_with("POST /vr/v1/pair/confirm "))
+				status = 200, body = "{}";
+			else if (req.starts_with("POST /vr/v1/pair "))
+				status = 200, body = R"({"pairingID":"fake","serverNonce":")" + fenrir::to_hex(fenrir::random_nonce()) + R"(","pairingURL":"https://fake/pair"})";
+			else if (req.starts_with("GET /vr/v1/apps "))
+				status = 200, body = R"({"apps":[]})";
+			// Count only requests that arrived: with TLS 1.3 the handshake completes here before
+			// a pinning client checks the key and hangs up
+			if (not req.empty())
+				++requests;
+			std::string reply = "HTTP/1.1 " + std::to_string(status) + " X\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body;
+			SSL_write(ssl, reply.data(), reply.size());
+			SSL_shutdown(ssl);
+		}
+		SSL_free(ssl);
+		::close(conn);
+	}
+
+public:
+	fenrir::tls_identity identity = fenrir::make_tls_identity();
+	int port = 0;
+	std::atomic<int> requests = 0;
+
+	fake_front_door()
+	{
+		// A headset that drops the connection (a pin mismatch) must not kill the test
+		std::signal(SIGPIPE, SIG_IGN);
+		ctx = SSL_CTX_new(TLS_server_method());
+		BIO * bio = BIO_new_mem_buf(identity.cert.data(), identity.cert.size());
+		X509 * cert = PEM_read_bio_X509(bio, nullptr, nullptr, nullptr);
+		BIO_free(bio);
+		bio = BIO_new_mem_buf(identity.key.data(), identity.key.size());
+		EVP_PKEY * key = PEM_read_bio_PrivateKey(bio, nullptr, nullptr, nullptr);
+		BIO_free(bio);
+		if (not cert or not key or SSL_CTX_use_certificate(ctx, cert) != 1 or SSL_CTX_use_PrivateKey(ctx, key) != 1)
+			throw std::runtime_error("fake front door: bad identity");
+		X509_free(cert);
+		EVP_PKEY_free(key);
+		// Ask for the headset's certificate, accept any
+		SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, [](int, X509_STORE_CTX *) { return 1; });
+
+		fd = ::socket(AF_INET, SOCK_STREAM, 0);
+		sockaddr_in addr{.sin_family = AF_INET, .sin_port = 0};
+		addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+		socklen_t len = sizeof(addr);
+		if (::bind(fd, (sockaddr *)&addr, sizeof(addr)) or ::listen(fd, 8) or ::getsockname(fd, (sockaddr *)&addr, &len))
+			throw std::runtime_error("fake front door: cannot listen");
+		port = ntohs(addr.sin_port);
+		thread = std::thread([this] {
+			for (int conn; (conn = ::accept(fd, nullptr, nullptr)) >= 0;)
+				serve(conn);
+		});
+	}
+
+	~fake_front_door()
+	{
+		::shutdown(fd, SHUT_RDWR);
+		thread.join();
+		::close(fd);
+		SSL_CTX_free(ctx);
+	}
+
+	std::array<uint8_t, 32> key() const
+	{
+		return fenrir::certificate_key_sha256(identity.cert);
+	}
+};
+
+// The lobby's pairing exchange, without the GUI: /pair, then /pair/confirm pinned to the key /pair saw
+std::array<uint8_t, 32> run_pairing(const fenrir::server & srv)
+{
+	fenrir::client c{srv};
+	auto nonce = fenrir::random_nonce();
+	auto reply = c.pair("headset-key", "Quest", fenrir::sha256({reinterpret_cast<const char *>(nonce.data()), nonce.size()}));
+	c.confirm(reply.server_key, reply.pairing_id, nonce);
+	return reply.server_key;
+}
+
+void test_fake_front_door(const std::filesystem::path & dir)
+{
+	fake_front_door fake;
+	auto id = fenrir::make_tls_identity();
+	const fenrir::server added{.id = "typed", .name = "typed", .host = "127.0.0.1", .port = fake.port, .tls_key = id.key, .tls_cert = id.cert};
+
+	// Address typed in: confirm's 200 proves nothing, so nothing is pinned until the user accepts
+	{
+		fenrir::server srv = added;
+		std::array<uint8_t, 32> key{};
+		CHECK(not throws([&] { key = run_pairing(srv); }));
+		CHECK(key == fake.key());
+		CHECK(fenrir::finish_pairing(srv) == fenrir::pairing_outcome::check_key);
+		CHECK(srv.server_key_sha256.empty() and not srv.paired);
+
+		auto path = dir / "fake.json";
+		fenrir::store s;
+		s.servers.push_back(srv);
+		s.save(path);
+		auto l = fenrir::store::load(path);
+		CHECK(l.servers.size() == 1 and l.servers[0].server_key_sha256.empty() and not l.servers[0].paired);
+		// Unpinned, so later calls are refused before they reach the network
+		int before = fake.requests;
+		CHECK(throws([&] { fenrir::client{l.servers[0]}.apps(); }));
+		CHECK(fake.requests == before);
+
+		// The user matched the fingerprint: pinned, and the pin works
+		fenrir::accept_key(srv, key);
+		CHECK(srv.paired and srv.server_key_sha256 == fenrir::to_hex(fake.key()));
+		CHECK(not throws([&] { fenrir::client{srv}.apps(); }));
+	}
+
+	// Pinned before /pair (a QR/link add carrying a different key): the fake is refused in TLS
+	{
+		fenrir::server srv = added;
+		srv.server_key_sha256 = fenrir::to_hex(fenrir::sha256("the real front door"));
+		int before = fake.requests;
+		try
+		{
+			run_pairing(srv);
+			CHECK(false);
+		}
+		catch (fenrir::api_error & e)
+		{
+			CHECK(e.status == 0);
+		}
+		CHECK(fake.requests == before);
+		CHECK(srv.server_key_sha256 == fenrir::to_hex(fenrir::sha256("the real front door")) and not srv.paired);
+	}
+
+	// Pinned before /pair to the right key: the whole exchange was pinned, no compare needed
+	{
+		fenrir::server srv = added;
+		srv.server_key_sha256 = fenrir::to_hex(fake.key());
+		std::array<uint8_t, 32> key{};
+		CHECK(not throws([&] { key = run_pairing(srv); }));
+		CHECK(key == fake.key());
+		CHECK(fenrir::finish_pairing(srv) == fenrir::pairing_outcome::paired);
+		CHECK(srv.paired and srv.server_key_sha256 == fenrir::to_hex(fake.key()));
+	}
+}
 } // namespace
 
 int main()
@@ -257,6 +450,7 @@ int main()
 	test_wivrn_key_body();
 	test_parse();
 	test_store(dir);
+	test_fake_front_door(dir);
 
 	std::filesystem::remove_all(dir);
 	if (failures)
