@@ -177,6 +177,11 @@ void wivrn::add_trusted_key(const std::filesystem::path & path, const crypto::ke
 	write_private_file(path, content);
 }
 
+void wivrn::write_private_file(const std::filesystem::path & path, const std::string & content)
+{
+	::write_private_file(path, content);
+}
+
 void wivrn::forget_trusted_keys(const std::filesystem::path & path, std::error_code & ec)
 {
 	std::filesystem::remove(path, ec);

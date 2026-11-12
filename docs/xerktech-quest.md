@@ -70,3 +70,18 @@ Notes:
   `adb uninstall org.meumeu.wivrn.xerktech`, installing the older APK, and re-pairing.
 - Wireless adb (after the first USB connection): `adb tcpip 5555`, then
   `adb connect <headset-ip>:5555`.
+
+## fenrir: pair once, launch from the headset (XERK-2809)
+
+fenrir's VR front door (fenrir `docs/vr-native-session.md`) replaces the per-session PIN:
+
+1. Lobby → Computers → fenrir → "Add fenrir server": the front door's address and port
+   (moonlight-proxy `--vr-port`).
+2. The headset shows an 8-digit code and the pairing page's URL. Sign in there and enter the code.
+3. "Games" lists the account's VR Apps. Picking one starts its session (about 15-20 s), then the
+   stream connects with no PIN: the session's WiVRn key comes from the paired API and is pinned.
+4. "Stop game" ends the session. Deleting the headset in fenrir revokes it: the headset then says
+   so and offers to pair again.
+
+Pairings live in `fenrir.json` beside `client.json`, owner-only (it holds the headset's TLS keys).
+Uninstalling the app loses them.

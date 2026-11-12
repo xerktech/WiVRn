@@ -19,6 +19,7 @@
 
 #include "wivrn_client.h"
 #include "application.h"
+#include "fenrir.h"
 #include "identity.h"
 #include "protocol_version.h"
 #include "secrets.h"
@@ -83,7 +84,7 @@ auto & port(sockaddr_in6 & sa)
 } // namespace
 
 template <typename T>
-void wivrn_session::handshake(T address, bool tcp_only, crypto::key & headset_keypair, std::function<std::string(int fd)> pin_enter)
+void wivrn_session::handshake(T address, bool tcp_only, crypto::key & headset_keypair, std::function<std::string(int fd)> pin_enter, const std::string & pinned_identity)
 {
 	// FIXME this comment
 	// Wait for handshake on control socket,
@@ -148,6 +149,24 @@ void wivrn_session::handshake(T address, bool tcp_only, crypto::key & headset_ke
 			throw std::runtime_error(_("Invalid server identity key"));
 	}
 
+	const bool pinned = not pinned_identity.empty();
+	if (pinned)
+	{
+		// Checked before anything else: a server that is not the one fenrir started gets nothing
+		// Other states (incompatible version, key error...) carry no key: their own error below
+		if (crypto_handshake.state == to_headset::crypto_handshake::crypto_state::encryption_disabled or
+		    (server_identity and fenrir::from_hex(pinned_identity) != server_identity.raw_public_key()))
+		{
+			spdlog::warn("Server identity key does not match the pinned key, refusing to connect");
+			throw std::runtime_error(_("The server's identity key is not the one fenrir reported for this session, refusing to connect"));
+		}
+		if (crypto_handshake.state == to_headset::crypto_handshake::crypto_state::pin_needed)
+		{
+			spdlog::warn("Session server asked for a PIN, refusing to connect");
+			throw std::runtime_error(_("The session asked for a PIN: fenrir does not know this headset's key. Pair the headset with fenrir again."));
+		}
+	}
+
 	std::string pin = "000000";
 	switch (crypto_handshake.state)
 	{
@@ -208,7 +227,7 @@ void wivrn_session::handshake(T address, bool tcp_only, crypto::key & headset_ke
 			const bool pairing = crypto_handshake.state == to_headset::crypto_handshake::crypto_state::pin_needed;
 
 			// Without the PIN, only a server whose identity was pinned at pairing is accepted
-			if (not pairing and not wivrn::is_trusted_key(application::get_trusted_servers_path(), server_identity))
+			if (not pinned and not pairing and not wivrn::is_trusted_key(application::get_trusted_servers_path(), server_identity))
 			{
 				spdlog::warn("Server identity key is not trusted, refusing to connect");
 				throw std::runtime_error(_("Unknown server identity. If this is your server, remove this headset from its paired devices and pair again."));
@@ -285,12 +304,12 @@ void wivrn_session::handshake(T address, bool tcp_only, crypto::key & headset_ke
 	}
 }
 
-wivrn_session::wivrn_session(sockaddr_in6 address, bool tcp_only, crypto::key & headset_keypair, std::function<std::string(int fd)> pin_enter) :
+wivrn_session::wivrn_session(sockaddr_in6 address, bool tcp_only, crypto::key & headset_keypair, std::function<std::string(int fd)> pin_enter, const std::string & pinned_identity) :
         control(address), stream(-1), address(address.sin6_addr)
 {
 	try
 	{
-		handshake(address, tcp_only, headset_keypair, pin_enter);
+		handshake(address, tcp_only, headset_keypair, pin_enter, pinned_identity);
 	}
 	catch (std::exception & e)
 	{
@@ -298,12 +317,12 @@ wivrn_session::wivrn_session(sockaddr_in6 address, bool tcp_only, crypto::key & 
 	}
 }
 
-wivrn_session::wivrn_session(sockaddr_in address, bool tcp_only, crypto::key & headset_keypair, std::function<std::string(int fd)> pin_enter) :
+wivrn_session::wivrn_session(sockaddr_in address, bool tcp_only, crypto::key & headset_keypair, std::function<std::string(int fd)> pin_enter, const std::string & pinned_identity) :
         control(address), stream(-1), address(address.sin_addr)
 {
 	try
 	{
-		handshake(address, tcp_only, headset_keypair, pin_enter);
+		handshake(address, tcp_only, headset_keypair, pin_enter, pinned_identity);
 	}
 	catch (std::exception & e)
 	{

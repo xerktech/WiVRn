@@ -21,6 +21,7 @@
 
 #include "configuration.h"
 #include "crypto.h"
+#include "fenrir.h"
 #include "file_picker.h"
 #include "libcurl.h"
 #include "scene.h"
@@ -33,7 +34,9 @@
 #include <vulkan/vulkan_raii.hpp>
 #include <openxr/openxr.h>
 
+#include <array>
 #include <compare>
+#include <map>
 #include <optional>
 #include <uni_algo/case.h>
 #include <vector>
@@ -255,12 +258,64 @@ class lobby : public scene_impl<lobby>
 
 	void setup_passthrough();
 
-	void connect(const configuration::server_data & data);
-	std::unique_ptr<wivrn_session> connect_to_session(wivrn_discover::service service, bool manual_connection);
+	// pinned_identity: see wivrn_session
+	void connect(const configuration::server_data & data, const std::string & pinned_identity = {});
+	std::unique_ptr<wivrn_session> connect_to_session(wivrn_discover::service service, bool manual_connection, const std::string & pinned_identity);
 
 	std::optional<glm::vec3> check_recenter_gesture(xr::spaces space, const xr::hand_tracker::joint_array & joints, const std::pair<glm::vec3, glm::quat> & head_pose);
 	std::optional<glm::vec3> check_recenter_action(XrTime predicted_display_time, glm::vec3 head_position);
 	std::optional<glm::vec3> check_recenter_gui(glm::vec3 head_position, glm::quat head_orientation);
+
+public:
+	// fenrir front doors (lobby_gui_fenrir.cpp): pair once by code, then list and launch VR Apps.
+	// Public for that file's worker functions.
+	enum class fenrir_op_kind
+	{
+		none,
+		pairing,
+		loading,
+		launching,
+		stopping,
+	};
+	struct fenrir_progress
+	{
+		std::string status;
+		std::string code; // pairing code to show, once known
+		std::string url;  // where to enter it, if the server said
+	};
+	struct fenrir_result
+	{
+		std::array<uint8_t, 32> server_key{}; // pairing: the key to pin
+		std::vector<fenrir::app> apps;
+		std::vector<std::pair<std::string, std::vector<std::byte>>> covers; // app id, PNG
+		fenrir::session session;
+	};
+
+private:
+	bool fenrir_loaded = false;
+	// nullopt when fenrir.json could not be read: it is then never saved, so nothing is lost
+	std::optional<fenrir::store> fenrir_store;
+	std::string fenrir_store_error;
+	std::string fenrir_current; // id of the server in the fenrir window
+	fenrir_op_kind fenrir_op_running = fenrir_op_kind::none;
+	utils::future<fenrir_result, fenrir_progress> fenrir_op;
+	std::optional<fenrir::api_error> fenrir_error;
+	std::vector<fenrir::app> fenrir_apps;
+	std::optional<fenrir::session> fenrir_session;
+	std::map<std::string, ImTextureID> fenrir_covers;
+	std::string fenrir_add_name;
+	std::string fenrir_add_host;
+	int fenrir_add_port = 0;
+	std::string fenrir_delete; // server pending a delete confirmation
+
+	fenrir::server * fenrir_server();
+	bool fenrir_save();
+	void fenrir_start(fenrir_op_kind kind, std::string app_id = {});
+	void fenrir_poll();
+	void fenrir_clear_covers();
+	void gui_fenrir_servers();
+	void gui_fenrir_add();
+	void gui_fenrir_window();
 
 	crypto::key keypair;
 	// keypair's public_key_fingerprint(), shown to the user; empty if it could not be computed
