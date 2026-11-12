@@ -91,6 +91,23 @@ void test_pairing_code()
 	CHECK(fenrir::key_fingerprint(fenrir::sha256("")) == "e3b0 c442 98fc 1c14 9afb f4c8 996f b924");
 }
 
+// A first pairing pins nothing until the user accepts the key (XERK-2813)
+void test_first_pairing()
+{
+	auto key = fenrir::sha256("door");
+	fenrir::server first{.id = "a"};
+	CHECK(fenrir::finish_pairing(first) == fenrir::pairing_outcome::check_key);
+	CHECK(not first.paired and first.server_key_sha256.empty());
+	CHECK(fenrir::pairing_url_to_show(first, "https://attacker.example/pin/").empty());
+	fenrir::accept_key(first, key);
+	CHECK(first.paired and first.server_key_sha256 == fenrir::to_hex(key));
+
+	fenrir::server pinned{.id = "b", .server_key_sha256 = fenrir::to_hex(key)};
+	CHECK(fenrir::finish_pairing(pinned) == fenrir::pairing_outcome::paired);
+	CHECK(pinned.paired and pinned.server_key_sha256 == fenrir::to_hex(key));
+	CHECK(fenrir::pairing_url_to_show(pinned, "https://pair.example/pin/") == "https://pair.example/pin/");
+}
+
 void test_hex()
 {
 	CHECK(fenrir::to_hex(std::vector<uint8_t>{0x00, 0xab, 0xff}) == "00abff");
@@ -235,6 +252,7 @@ int main()
 
 	test_pairing_code();
 	test_hex();
+	test_first_pairing();
 	test_tls_identity();
 	test_wivrn_key_body();
 	test_parse();

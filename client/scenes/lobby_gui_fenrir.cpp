@@ -131,7 +131,7 @@ scenes::lobby::fenrir_result pair(token_t & token, fenrir::server srv, std::stri
 	}
 
 	auto code = fenrir::pairing_code(reply.server_key, fenrir::certificate_key_sha256(srv.tls_cert), wivrn_key, reply.server_nonce, nonce);
-	token.set_progress({.status = _("Waiting for the code to be entered"), .code = code, .url = reply.pairing_url});
+	token.set_progress({.status = _("Waiting for the code to be entered"), .code = code, .url = fenrir::pairing_url_to_show(srv, reply.pairing_url)});
 
 	try
 	{
@@ -193,8 +193,9 @@ scenes::lobby::fenrir_result stop(token_t & token, fenrir::server srv)
 	return load(token, srv);
 }
 
-std::string error_text(const fenrir::api_error & e, const std::string & server_name)
+std::string error_text(const fenrir::api_error & e, const fenrir::server & srv)
 {
+	const std::string & server_name = srv.name;
 	switch (e.status)
 	{
 		case 401:
@@ -202,6 +203,10 @@ std::string error_text(const fenrir::api_error & e, const std::string & server_n
 		case 408:
 			return _("Nobody entered the code in time. Start pairing again.");
 		case 409:
+			// fenrir paired this headset, but it never kept the key (rejected, or the app quit
+			// while it was shown): pairing this entry again can only get 409
+			if (srv.server_key_sha256.empty())
+				return fmt::format(_F("{} already has this headset paired, but this headset never kept its key. Delete this server here, remove the old headset in fenrir, then add the server again."), server_name);
 			return fmt::format(_F("Busy: {}"), e.what());
 		default:
 			return e.what();
@@ -309,13 +314,11 @@ void scenes::lobby::fenrir_poll()
 			case fenrir_op_kind::pairing:
 				// Nothing pinned before this pairing: whoever answered may not be fenrir. Pin
 				// only once the user matched the key with fenrir's pairing page.
-				if (srv->server_key_sha256.empty())
+				if (fenrir::finish_pairing(*srv) == fenrir::pairing_outcome::check_key)
 				{
 					fenrir_key_check = r.server_key;
 					break;
 				}
-				srv->server_key_sha256 = fenrir::to_hex(r.server_key);
-				srv->paired = true;
 				// Keep the save error on screen: the pairing would be lost at restart
 				if (fenrir_save())
 					fenrir_start(fenrir_op_kind::loading);
@@ -533,7 +536,7 @@ void scenes::lobby::gui_fenrir_window()
 	// pinned. The code alone proves nothing here, as a fake front door computes it too.
 	if (fenrir_key_check)
 	{
-		ImGui::TextWrapped("%s", _S("Check this server's key. fenrir's VR headset pairing page shows its key: it must be exactly this one."));
+		ImGui::TextWrapped("%s", _S("Check this server's key. Open fenrir's pairing page the way you always do, signed in to your account, never from a link this headset showed: it shows fenrir's key, which must be exactly this one."));
 		ImGui::Dummy({0, 12});
 		const std::string fp = fenrir::key_fingerprint(*fenrir_key_check);
 		ImGui::PushFont(nullptr, style.FontSizeBase * 2);
@@ -555,8 +558,7 @@ void scenes::lobby::gui_fenrir_window()
 				fenrir_key_rejected = true;
 				break;
 			case 1:
-				srv->server_key_sha256 = fenrir::to_hex(*fenrir_key_check);
-				srv->paired = true;
+				fenrir::accept_key(*srv, *fenrir_key_check);
 				fenrir_key_check.reset();
 				// Keep the save error on screen: the pairing would be lost at restart
 				if (fenrir_save())
@@ -569,7 +571,7 @@ void scenes::lobby::gui_fenrir_window()
 	if (fenrir_key_rejected)
 	{
 		ImGui::PushStyleColor(ImGuiCol_Text, t.text_muted);
-		ImGui::TextWrapped("%s %s", ICON_FA_CIRCLE_EXCLAMATION, _S("Not paired: that key was not fenrir's. Check the address, then pair again."));
+		ImGui::TextWrapped("%s %s", ICON_FA_CIRCLE_EXCLAMATION, _S("Not paired: that key was not fenrir's. Check the address, then pair again. If pairing then says this headset is already paired, delete this server here and add it again."));
 		ImGui::PopStyleColor();
 		ImGui::Dummy({0, 12});
 	}
@@ -577,7 +579,7 @@ void scenes::lobby::gui_fenrir_window()
 	if (fenrir_error)
 	{
 		ImGui::PushStyleColor(ImGuiCol_Text, t.text_muted);
-		ImGui::TextWrapped("%s %s", ICON_FA_CIRCLE_EXCLAMATION, error_text(*fenrir_error, srv->name).c_str());
+		ImGui::TextWrapped("%s %s", ICON_FA_CIRCLE_EXCLAMATION, error_text(*fenrir_error, *srv).c_str());
 		ImGui::PopStyleColor();
 		ImGui::Dummy({0, 12});
 	}

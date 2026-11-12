@@ -22,6 +22,13 @@ paths:
   user matches `key_fingerprint` with the one fenrir's pairing page shows; never auto-accept.
   A key pinned before `/pair` (a QR, XERK-2812) needs no check. `key_fingerprint` must stay equal
   to fenrir's `vrKeyFingerprint`; `test_pairing_code` holds its vector.
+  - The decision is `finish_pairing` / `accept_key` in `fenrir.cpp` so `test_first_pairing`
+    holds it: the lobby is in no test gate.
+  - A first pairing shows no server-sent `pairingURL` (`pairing_url_to_show`): a fake door would
+    send the user to its own page, showing its own key. The check text says to open the page
+    the usual way.
+  - A rejected key leaves fenrir's Headset in place, so pairing that entry again gets 409 for
+    good: with nothing pinned the 409 text says to delete and re-add the server (a new TLS key).
 - The TLS key never leaves the headset: only the certificate goes out, in the handshake.
 - `fenrir.json` is separate from `client.json` so one damaged file never loses the other.
   - Damaged: moved to `.bad-<seconds>`. Unreadable (I/O): the lobby never saves over it.

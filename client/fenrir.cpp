@@ -273,6 +273,27 @@ std::string key_fingerprint(const std::array<uint8_t, 32> & key)
 	return out;
 }
 
+pairing_outcome finish_pairing(server & srv)
+{
+	if (srv.server_key_sha256.empty())
+		return pairing_outcome::check_key;
+	srv.paired = true;
+	return pairing_outcome::paired;
+}
+
+void accept_key(server & srv, const std::array<uint8_t, 32> & key)
+{
+	srv.server_key_sha256 = to_hex(key);
+	srv.paired = true;
+}
+
+std::string pairing_url_to_show(const server & srv, std::string_view url)
+{
+	if (srv.server_key_sha256.empty())
+		return {};
+	return std::string{url};
+}
+
 // Store
 
 store store::load(const std::filesystem::path & path)
