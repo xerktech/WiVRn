@@ -275,8 +275,8 @@ void scenes::lobby::fenrir_start(fenrir_op_kind kind, std::string app_id)
 			fenrir_op = utils::async<R, P>(
 			        [](auto token, fenrir::server srv, std::string id, std::string title) { return launch(token, srv, id, title); },
 			        fenrir::server{*srv},
-			        app_id,
-			        title);
+			        std::string{app_id},
+			        std::string{title});
 			break;
 		}
 		case fenrir_op_kind::stopping:
