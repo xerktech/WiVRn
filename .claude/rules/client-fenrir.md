@@ -17,7 +17,7 @@ paths:
     either request makes the codes differ.
   - Session reuse is off: a resumed TLS session carries no certificate to pin or read.
 - The pin is saved only once confirm succeeds, so a relay that fenrir refuses leaves nothing behind.
-  - A first-pairing relay that answers confirm's 200 itself is still pinned: XERK-2817.
+  - A first-pairing relay that answers confirm's 200 itself is still pinned: XERK-2816.
   - The key `/pair` saw is saved as `pending_server_key_sha256` before the code shows. It is used
     only after `/pair` answers 409 (already paired): a pinned `GET /apps` to it must succeed before
     it is adopted. That recovers a pairing fenrir completed while the app died before saving.
