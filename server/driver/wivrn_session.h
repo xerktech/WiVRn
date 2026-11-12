@@ -71,6 +71,8 @@ class wivrn_session : public xrt_system_devices
 
 	wivrn::compositor compositor;
 	pacing_app_factory app_pacers;
+	// The headset's own XR session is FOCUSED (worn, WiVRn in front).
+	std::atomic<bool> headset_focused{false};
 
 	b_system & xrt_system;
 	ipc_server * mnd_ipc_server;

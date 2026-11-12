@@ -48,6 +48,13 @@ struct server_error
 	std::string message;
 };
 
+// Sent every few seconds while a headset is connected (XERK-2844).
+struct app_activity
+{
+	uint64_t frames_delivered;
+	bool headset_focused;
+};
+
 using packets = std::variant<
         wivrn::from_headset::headset_info_packet,
         wivrn::from_headset::settings_changed,
@@ -55,7 +62,8 @@ using packets = std::variant<
         wivrn::from_headset::stream_tab_changed,
         headset_connected,
         headset_disconnected,
-        server_error>;
+        server_error,
+        app_activity>;
 } // namespace from_monado
 
 namespace to_monado

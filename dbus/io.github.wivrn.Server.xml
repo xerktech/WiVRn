@@ -46,6 +46,12 @@
 		<property name="SteamCommand"          type="s" access="read"/>
 		<property name="JsonConfiguration"     type="s" access="readwrite"/>
 		<property name="Bitrate"               type="u" access="read"/>
+		<!-- Frames the OpenXR applications delivered (xrEndFrame), summed, and
+		     whether the headset's own session is FOCUSED. Refreshed every few
+		     seconds: a supervisor ends a stream whose game stopped delivering
+		     frames while the user looks at it (XERK-2844). -->
+		<property name="AppFramesDelivered"    type="t" access="read"/>
+		<property name="HeadsetFocused"        type="b" access="read"/>
 
 		<!-- Data from the headset info packet -->
 		<property name="AvailableRefreshRates" type="ad" access="read">

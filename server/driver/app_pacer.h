@@ -20,6 +20,8 @@
 
 #include "util/u_pacing.h"
 
+#include <atomic>
+#include <cstdint>
 #include <mutex>
 #include <vector>
 
@@ -34,6 +36,9 @@ class pacing_app_factory : public u_pacing_app_factory
 	friend class app_pacer;
 	std::mutex mutex;
 	std::vector<app_pacer *> app_pacers;
+	// Frames every application delivered or discarded (xrEndFrame), ever:
+	// it stops rising when the game hangs (XERK-2844).
+	std::atomic<uint64_t> frames_delivered{0};
 	void remove_app(app_pacer *);
 
 public:
@@ -44,6 +49,11 @@ public:
 	void destroy();
 
 	int64_t get_frame_time();
+
+	uint64_t get_frames_delivered() const
+	{
+		return frames_delivered.load(std::memory_order_relaxed);
+	}
 };
 
 } // namespace wivrn
