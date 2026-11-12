@@ -109,8 +109,13 @@ void test_first_pairing()
 	CHECK(fenrir::finish_pairing(first) == fenrir::pairing_outcome::check_key);
 	CHECK(not first.paired and first.server_key_sha256.empty());
 	CHECK(fenrir::pairing_url_to_show(first, "https://attacker.example/pin/").empty());
+	// A key saved as pending (for the 409 recovery) is not a pin: the user still checks it
+	first.pending_server_key_sha256 = fenrir::to_hex(key);
+	CHECK(fenrir::finish_pairing(first) == fenrir::pairing_outcome::check_key);
+	CHECK(not first.paired and first.server_key_sha256.empty());
 	fenrir::accept_key(first, key);
 	CHECK(first.paired and first.server_key_sha256 == fenrir::to_hex(key));
+	CHECK(first.pending_server_key_sha256.empty());
 
 	fenrir::server pinned{.id = "b", .server_key_sha256 = fenrir::to_hex(key)};
 	CHECK(fenrir::finish_pairing(pinned) == fenrir::pairing_outcome::paired);
