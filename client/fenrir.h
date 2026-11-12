@@ -70,6 +70,8 @@ struct store
 	std::vector<server> servers;
 	// Entries that could not be parsed, as minified JSON, written back by save()
 	std::vector<std::string> unparsed;
+	// Top-level members other than "servers", as ,"key":value pairs, written back by save()
+	std::string extra;
 
 	// A missing file is an empty store. A file that cannot be parsed is moved aside to
 	// <path>.bad-<unix seconds>, never overwritten by the next save().

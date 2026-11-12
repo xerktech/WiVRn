@@ -21,6 +21,7 @@
 
 #include <arpa/inet.h>
 #include <atomic>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -211,6 +212,19 @@ void test_store(const std::filesystem::path & dir)
 	CHECK(l.servers.size() == 2 and l.servers[1].pending_server_key_sha256 == std::string(64, 'c'));
 	l.save(path);
 	CHECK(read(path) == json); // stable: nothing duplicated
+	// Top-level members other than "servers" survive too
+	json.insert(1, R"("version":2,)");
+	std::ofstream{path} << json;
+	l = fenrir::store::load(path);
+	l.save(path);
+	CHECK(read(path).find(R"("version":2)") != std::string::npos);
+	// A pending key of another type makes the entry unparsed, never silently drops it
+	for (std::string bad: {"null", "7", "{}"})
+	{
+		std::ofstream{path} << R"({"servers":[{"id":"c","name":"c","host":"h","port":1,"tls_key":"k","tls_cert":"c","paired":false,"pending_server_key_sha256":)" + bad + "}]}";
+		l = fenrir::store::load(path);
+		CHECK(l.servers.empty() and l.unparsed.size() == 1);
+	}
 	// A malformed pending key makes the entry unparsed, not trusted
 	std::ofstream{path} << R"({"servers":[{"id":"c","name":"c","host":"h","port":1,"tls_key":"k","tls_cert":"c","paired":false,"pending_server_key_sha256":"zz"}]})";
 	l = fenrir::store::load(path);
@@ -407,6 +421,9 @@ void test_tls_pin()
 
 int main()
 {
+	// tls_server writes to sockets the client closed (a refused pin hangs up mid-handshake)
+	::signal(SIGPIPE, SIG_IGN);
+
 	auto dir = std::filesystem::temp_directory_path() / ("fenrir_ut." + std::to_string(::getpid()));
 	std::filesystem::create_directories(dir);
 

@@ -267,6 +267,8 @@ class lobby : public scene_impl<lobby>
 	std::optional<glm::vec3> check_recenter_gui(glm::vec3 head_position, glm::quat head_orientation);
 
 	// fenrir front doors (lobby_gui_fenrir.cpp): pair once by code, then list and launch VR Apps
+public:
+	// Used by the background calls in lobby_gui_fenrir.cpp
 	enum class fenrir_op_kind
 	{
 		none,
@@ -290,6 +292,8 @@ class lobby : public scene_impl<lobby>
 		std::vector<std::pair<std::string, std::vector<std::byte>>> covers; // app id, PNG
 		fenrir::session session;
 	};
+
+private:
 	bool fenrir_loaded = false;
 	// nullopt when fenrir.json could not be read: it is then never saved, so nothing is lost
 	std::optional<fenrir::store> fenrir_store;

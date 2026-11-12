@@ -274,6 +274,9 @@ store store::load(const std::filesystem::path & path)
 		simdjson::dom::parser parser;
 		simdjson::dom::element root = parser.load(path.native());
 		simdjson::dom::array servers = root["servers"];
+		for (auto [key, value]: simdjson::dom::object(root))
+			if (key != "servers")
+				s.extra += "," + json_string(key) + ":" + simdjson::minify(value);
 		for (simdjson::dom::element entry: servers)
 		{
 			try
@@ -291,8 +294,10 @@ store store::load(const std::filesystem::path & path)
 				        .tls_cert = (std::string)o["tls_cert"],
 				        .server_key_sha256 = get_string(o, "server_key_sha256"),
 				        .paired = o["paired"].get_bool(),
-				        .pending_server_key_sha256 = get_string(o, "pending_server_key_sha256"),
 				};
+				// Present means a string: any other type makes the entry unparsed, not dropped
+				if (auto pending = o["pending_server_key_sha256"]; pending.error() != simdjson::NO_SUCH_FIELD)
+					srv.pending_server_key_sha256 = (std::string)pending;
 				for (auto [key, value]: o)
 				{
 					static constexpr std::string_view known[] = {"id", "name", "host", "port", "tls_key", "tls_cert", "server_key_sha256", "paired", "pending_server_key_sha256"};
@@ -369,7 +374,7 @@ void store::save(const std::filesystem::path & path) const
 		first = false;
 		json << entry;
 	}
-	json << "]}";
+	json << "]" << extra << "}";
 	wivrn::write_private_file(path, json.str());
 }
 

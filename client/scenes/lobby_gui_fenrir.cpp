@@ -107,8 +107,10 @@ std::optional<std::array<uint8_t, 32>> recover_pairing(token_t & token, fenrir::
 			std::ranges::copy(*key, r.begin());
 			return r;
 		}
-		catch (fenrir::api_error &)
-		{}
+		catch (std::exception &)
+		{
+			// Refused, or a reply that does not parse: try the next key
+		}
 	}
 	return std::nullopt;
 }
@@ -166,8 +168,9 @@ scenes::lobby::fenrir_result pair(token_t & token, fenrir::server srv, std::stri
 		{
 			check.apps();
 		}
-		catch (fenrir::api_error &)
+		catch (std::exception &)
 		{
+			// Refused, or a reply that does not parse: report the confirm's own error
 			throw e;
 		}
 	}
@@ -276,12 +279,12 @@ void scenes::lobby::fenrir_start(fenrir_op_kind kind, std::string app_id)
 		case fenrir_op_kind::pairing:
 			fenrir_op = utils::async<R, P>(
 			        [](auto token, fenrir::server srv, std::string key, std::string name) { return pair(token, srv, key, name); },
-			        *srv,
+			        fenrir::server{*srv}, // a copy: std::thread passes rvalues
 			        fenrir::wivrn_key_body(keypair.public_key()),
 			        application::get_hmd_traits().model_name());
 			break;
 		case fenrir_op_kind::loading:
-			fenrir_op = utils::async<R, P>([](auto token, fenrir::server srv) { return load(token, srv); }, *srv);
+			fenrir_op = utils::async<R, P>([](auto token, fenrir::server srv) { return load(token, srv); }, fenrir::server{*srv});
 			break;
 		case fenrir_op_kind::launching: {
 			std::string title = app_id;
@@ -290,13 +293,13 @@ void scenes::lobby::fenrir_start(fenrir_op_kind kind, std::string app_id)
 					title = a.title;
 			fenrir_op = utils::async<R, P>(
 			        [](auto token, fenrir::server srv, std::string id, std::string title) { return launch(token, srv, id, title); },
-			        *srv,
+			        fenrir::server{*srv}, // a copy: std::thread passes rvalues
 			        app_id,
 			        title);
 			break;
 		}
 		case fenrir_op_kind::stopping:
-			fenrir_op = utils::async<R, P>([](auto token, fenrir::server srv) { return stop(token, srv); }, *srv);
+			fenrir_op = utils::async<R, P>([](auto token, fenrir::server srv) { return stop(token, srv); }, fenrir::server{*srv});
 			break;
 	}
 }

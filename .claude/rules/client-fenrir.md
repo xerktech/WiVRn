@@ -16,18 +16,20 @@ paths:
   - `/pair/confirm` must be pinned to the key `/pair` saw: the code binds that key, so a relay on
     either request makes the codes differ.
   - Session reuse is off: a resumed TLS session carries no certificate to pin or read.
-- The pin is saved only once pairing succeeds, so a relayed first attempt leaves nothing behind.
+- The pin is saved only once confirm succeeds, so a relay that fenrir refuses leaves nothing behind.
+  - A first-pairing relay that answers confirm's 200 itself is still pinned: XERK-2817.
   - The key `/pair` saw is saved as `pending_server_key_sha256` before the code shows. It is used
     only after `/pair` answers 409 (already paired): a pinned `GET /apps` to it must succeed before
     it is adopted. That recovers a pairing fenrir completed while the app died before saving.
 - Tests: `test_tls_pin` runs a real TLS 1.3 server: a mutation that ignores or mis-reads the pin
-  must fail it.
+  must fail it. It needs SIGPIPE ignored (`main` does it), else a refused pin kills the process.
 - The TLS key never leaves the headset: only the certificate goes out, in the handshake.
 - `fenrir.json` is separate from `client.json` so one damaged file never loses the other.
   - Damaged: moved to `.bad-<seconds>`. Unreadable (I/O): the lobby never saves over it.
   - Entries it can't parse are written back unchanged.
-  - Members it doesn't know are kept in `server::extra` and written back, so an older build never
-    drops a newer one's fields. A new field must be added to `known` in `store::load`.
+  - Members it doesn't know, per entry (`server::extra`) and top level (`store::extra`), are
+    written back, so an older build never drops a newer one's fields. A new entry field must be
+    added to `known` in `store::load`.
 - A stream launched from fenrir passes the API's `serverKey` as `pinned_identity`: it is checked
   before any other handshake step, an unencrypted server or a PIN request is refused, and
   `trusted_servers` is neither read nor written.
