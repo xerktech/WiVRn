@@ -512,6 +512,8 @@ void scenes::lobby::gui_server_list()
 	}
 	ImGui::PopStyleVar();
 
+	gui_fenrir_servers();
+
 	if (open_add_edit)
 		ImGui::OpenPopup("add or edit server");
 

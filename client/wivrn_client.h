@@ -54,13 +54,19 @@ private:
 	std::atomic<uint64_t> bytes_received_ = 0;
 
 	template <typename T>
-	void handshake(T address, bool tcp_only, crypto::key & headset_keypair, std::function<std::string(int fd)> pin_enter);
+	void handshake(T address, bool tcp_only, crypto::key & headset_keypair, std::function<std::string(int fd)> pin_enter, const std::string & pinned_identity);
 
 public:
 	std::variant<in_addr, in6_addr> address;
 
-	wivrn_session(sockaddr_in6 address, bool tcp_only, crypto::key & headset_keypair, std::function<std::string(int fd)> pin_enter);
-	wivrn_session(sockaddr_in address, bool tcp_only, crypto::key & headset_keypair, std::function<std::string(int fd)> pin_enter);
+	// pinned_identity: the server's identity key (raw, hex) from an authenticated source (fenrir's
+	// front door); the server must present it, and no PIN or trusted_servers lookup is used.
+	// Empty: the server must be in trusted_servers or be paired by PIN.
+	wivrn_session(sockaddr_in6 address, bool tcp_only, crypto::key & headset_keypair, std::function<std::string(int fd)> pin_enter, const std::string & pinned_identity = {});
+	// pinned_identity: the server's identity key (raw, hex) from an authenticated source (fenrir's
+	// front door); the server must present it, and no PIN or trusted_servers lookup is used.
+	// Empty: the server must be in trusted_servers or be paired by PIN.
+	wivrn_session(sockaddr_in address, bool tcp_only, crypto::key & headset_keypair, std::function<std::string(int fd)> pin_enter, const std::string & pinned_identity = {});
 	wivrn_session(const wivrn_session &) = delete;
 	wivrn_session & operator=(const wivrn_session &) = delete;
 

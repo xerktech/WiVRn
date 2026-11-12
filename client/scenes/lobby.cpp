@@ -250,7 +250,7 @@ bool wait_before_retry(int retry, utils::async_token<std::unique_ptr<wivrn_sessi
 }
 } // namespace
 
-std::unique_ptr<wivrn_session> scenes::lobby::connect_to_session(wivrn_discover::service service, bool manual_connection)
+std::unique_ptr<wivrn_session> scenes::lobby::connect_to_session(wivrn_discover::service service, bool manual_connection, const std::string & pinned_identity)
 {
 	if (!manual_connection)
 	{
@@ -329,8 +329,8 @@ std::unique_ptr<wivrn_session> scenes::lobby::connect_to_session(wivrn_discover:
 		{
 			spdlog::info("Connection to {}", address_string);
 
-			return std::visit([this, &service, &pin_entered](auto & address) {
-				return std::make_unique<wivrn_session>(address, service.tcp_only, keypair, [&](int fd) {
+			return std::visit([this, &service, &pin_entered, &pinned_identity](auto & address) {
+				auto pin_enter = [&](int fd) {
 					auto request = pin_request.lock();
 					request->pin_requested = true;
 					request->pin_cancelled = false;
@@ -372,7 +372,8 @@ std::unique_ptr<wivrn_session> scenes::lobby::connect_to_session(wivrn_discover:
 
 					pin_entered = true;
 					return request->pin;
-				});
+				};
+				return std::make_unique<wivrn_session>(address, service.tcp_only, keypair, pin_enter, pinned_identity);
 			},
 			                  entry.address);
 		}
@@ -470,19 +471,19 @@ void scenes::lobby::update_server_list()
 	}
 }
 
-void scenes::lobby::connect(const configuration::server_data & data)
+void scenes::lobby::connect(const configuration::server_data & data, const std::string & pinned_identity)
 {
 	server_name = data.service.name;
 	async_error.reset();
 
 	async_session = utils::async<std::unique_ptr<wivrn_session>, std::string>(
-	        [this](auto token, wivrn_discover::service service, bool manual) {
+	        [this](auto token, wivrn_discover::service service, bool manual, std::string pinned_identity) {
 		        token.set_progress(_("Waiting for connection"));
 		        for (int retry = 0;; ++retry)
 		        {
 			        try
 			        {
-				        return connect_to_session(service, manual);
+				        return connect_to_session(service, manual, pinned_identity);
 			        }
 			        catch (dropped_by_server & e)
 			        {
@@ -496,7 +497,8 @@ void scenes::lobby::connect(const configuration::server_data & data)
 		        }
 	        },
 	        data.service,
-	        data.manual);
+	        data.manual,
+	        pinned_identity);
 }
 
 std::optional<glm::vec3> scenes::lobby::check_recenter_gesture(

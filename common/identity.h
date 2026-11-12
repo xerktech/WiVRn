@@ -19,6 +19,7 @@
 
 #include "crypto.h"
 #include <filesystem>
+#include <string>
 
 namespace wivrn
 {
@@ -35,4 +36,7 @@ void add_trusted_key(const std::filesystem::path & path, const crypto::key & key
 // Forget every trusted key: connecting to any server without its PIN is refused until it is paired
 // again. A missing file is not an error.
 void forget_trusted_keys(const std::filesystem::path & path, std::error_code & ec);
+
+// Atomically replace path with content, readable by the owner only
+void write_private_file(const std::filesystem::path & path, const std::string & content);
 } // namespace wivrn
