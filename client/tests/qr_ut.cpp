@@ -107,7 +107,7 @@ int main()
 		std::copy_n(&img.pixels[size_t(y) * img.width], img.width, &padded[size_t(y) * stride]);
 	CHECK(reads_fenrir_link(decode_qr(padded.data(), img.width, img.height, stride)));
 
-	// Upside down, as a camera may see it
+	// Upside down, as a camera may see it (QR detection works at any rotation)
 	std::vector<uint8_t> flipped(img.pixels.rbegin(), img.pixels.rend());
 	CHECK(reads_fenrir_link(decode_qr(flipped.data(), img.width, img.height, img.width)));
 

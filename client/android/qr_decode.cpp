@@ -25,7 +25,6 @@ std::vector<std::string> decode_qr(const uint8_t * luma, int width, int height, 
 	auto options = ZXing::ReaderOptions{}
 	                       .setFormats(ZXing::BarcodeFormat::QRCode)
 	                       .setTryHarder(true)
-	                       .setTryRotate(true)
 	                       .setMaxNumberOfSymbols(4);
 
 	std::vector<std::string> texts;

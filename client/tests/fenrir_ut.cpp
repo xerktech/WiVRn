@@ -163,6 +163,7 @@ void test_pairing_link()
 	             "fenrir-vr://[fd00::1]47990?key=" + key,
 	             "fenrir-vr://[]:47990?key=" + key,
 	             "fenrir-vr://[fe80::1%wlan0]:47990?key=" + key,
+	             "fenrir-vr://[fe80::1%1]:47990?key=" + key,
 	             "fenrir-vr://" + std::string(254, 'a') + ":1?key=" + key,
 	     })
 	{

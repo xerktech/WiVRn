@@ -27,6 +27,7 @@
 #include <mutex>
 #include <spdlog/spdlog.h>
 #include <stdexcept>
+#include <thread>
 #include <vector>
 
 namespace
@@ -34,7 +35,7 @@ namespace
 // Meta's com.meta.extra_metadata.camera_source vendor tag: 0 is a passthrough camera
 constexpr uint32_t meta_camera_source = 0x80004d00;
 
-// Decoding is the cost: a QR code on a screen a metre away reads fine at this width
+// Decoding is the cost; the decoder needs about 2 pixels per QR module, so closer is better
 constexpr int32_t max_width = 1280;
 
 void check(camera_status_t s, const char * what)
@@ -106,6 +107,11 @@ struct qr_scanner::impl
 	bool saw_other = false;
 	std::optional<std::string> error;
 	std::atomic<bool> done = false;
+	// on_image calls in progress. AImageReader_delete holds the reader's lock while it waits for
+	// its callback thread, and a callback needs that lock to take or free an image: close() waits
+	// for this to drop to 0 after setting done, and a later callback returns before touching the
+	// reader, so the two never wait on each other.
+	std::atomic<int> in_callback = 0;
 
 	ACameraManager * manager = nullptr;
 	ACameraDevice * device = nullptr;
@@ -142,6 +148,18 @@ struct qr_scanner::impl
 
 	void on_image(AImageReader * r)
 	{
+		++in_callback;
+		struct leave
+		{
+			std::atomic<int> & n;
+			~leave()
+			{
+				--n;
+			}
+		} leave_guard{in_callback};
+		if (done)
+			return;
+
 		AImage * image = nullptr;
 		if (AImageReader_acquireLatestImage(r, &image) != AMEDIA_OK or not image)
 			return;
@@ -252,7 +270,11 @@ struct qr_scanner::impl
 		if (output)
 			ACaptureSessionOutput_free(output);
 		if (reader)
-			AImageReader_delete(reader); // waits for on_image to return
+		{
+			while (in_callback)
+				std::this_thread::yield();
+			AImageReader_delete(reader);
+		}
 		if (manager)
 			ACameraManager_delete(manager);
 		session = nullptr;
