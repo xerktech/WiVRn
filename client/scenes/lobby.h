@@ -266,7 +266,9 @@ class lobby : public scene_impl<lobby>
 	std::optional<glm::vec3> check_recenter_action(XrTime predicted_display_time, glm::vec3 head_position);
 	std::optional<glm::vec3> check_recenter_gui(glm::vec3 head_position, glm::quat head_orientation);
 
-	// fenrir front doors (lobby_gui_fenrir.cpp): pair once by code, then list and launch VR Apps
+public:
+	// fenrir front doors (lobby_gui_fenrir.cpp): pair once by code, then list and launch VR Apps.
+	// Public for that file's worker functions.
 	enum class fenrir_op_kind
 	{
 		none,
@@ -288,6 +290,8 @@ class lobby : public scene_impl<lobby>
 		std::vector<std::pair<std::string, std::vector<std::byte>>> covers; // app id, PNG
 		fenrir::session session;
 	};
+
+private:
 	bool fenrir_loaded = false;
 	// nullopt when fenrir.json could not be read: it is then never saved, so nothing is lost
 	std::optional<fenrir::store> fenrir_store;
@@ -305,7 +309,7 @@ class lobby : public scene_impl<lobby>
 	std::string fenrir_delete; // server pending a delete confirmation
 
 	fenrir::server * fenrir_server();
-	void fenrir_save();
+	bool fenrir_save();
 	void fenrir_start(fenrir_op_kind kind, std::string app_id = {});
 	void fenrir_poll();
 	void fenrir_clear_covers();

@@ -178,6 +178,21 @@ void test_store(const std::filesystem::path & dir)
 	CHECK(l.servers[0].server_key_sha256 == std::string(64, 'b'));
 	CHECK(not l.servers[1].paired and l.servers[1].server_key_sha256.empty());
 
+	// Control characters survive a round trip instead of damaging the file
+	fenrir::store ctl;
+	ctl.servers.push_back({.id = "c1", .name = std::string{"a\x01\x1f"
+	                                                       "b"},
+	                       .host = "h",
+	                       .port = 1,
+	                       .tls_key = id.key,
+	                       .tls_cert = id.cert});
+	ctl.save(path);
+	l = fenrir::store::load(path);
+	CHECK(l.servers.size() == 1 and l.servers[0].name == std::string{"a\x01\x1f"
+	                                                                 "b"} and
+	      l.unparsed.empty());
+	s.save(path);
+
 	// A bad entry is kept as it was, and written back
 	std::string json = read(path);
 	json.insert(json.find('[') + 1, R"({"id":"bad","port":99999},)");

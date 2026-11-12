@@ -59,7 +59,15 @@ std::string json_string(const std::string_view & in)
 				break;
 
 			default:
-				out += c;
+				// Any other control character is invalid in a JSON string
+				if ((unsigned char)c < 0x20)
+				{
+					out += "\\u00";
+					out += "0123456789abcdef"[c >> 4];
+					out += "0123456789abcdef"[c & 0xf];
+				}
+				else
+					out += c;
 				break;
 		}
 	}
