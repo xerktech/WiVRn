@@ -22,6 +22,9 @@
 #include "configuration.h"
 #include "crypto.h"
 #include "fenrir.h"
+#ifdef __ANDROID__
+#include "android/qr_scanner.h"
+#endif
 #include "file_picker.h"
 #include "libcurl.h"
 #include "scene.h"
@@ -315,8 +318,25 @@ private:
 	std::optional<std::array<uint8_t, 32>> fenrir_key_check;
 	bool fenrir_key_rejected = false;
 
+#ifdef __ANDROID__
+	// Adding a server from fenrir's pairing page QR code (XERK-2812). The camera only gives
+	// images while passthrough is on, so the lobby shows passthrough while it runs.
+	std::unique_ptr<qr_scanner> fenrir_scanner;
+	// The camera permission's answer: 0 pending, 1 granted, 2 refused. Shared, as the answer comes
+	// on Android's thread and may outlive the lobby.
+	std::shared_ptr<std::atomic<int>> fenrir_scan_permission;
+	std::string fenrir_scan_error;
+	void fenrir_scan_start();
+	void fenrir_scan_stop();
+	void gui_fenrir_scan();
+#endif
+	// Passthrough as configured, or forced on to read a QR code
+	bool passthrough_on() const;
+
 	fenrir::server * fenrir_server();
 	bool fenrir_save();
+	// A new entry, pairing at once. server_key_sha256 (from a QR code) pins the key before /pair.
+	void fenrir_add_server(std::string name, std::string host, int port, std::string server_key_sha256 = {});
 	void fenrir_start(fenrir_op_kind kind, std::string app_id = {});
 	void fenrir_poll();
 	void fenrir_clear_covers();

@@ -123,6 +123,63 @@ void test_first_pairing()
 	CHECK(fenrir::pairing_url_to_show(pinned, "https://pair.example/pin/") == "https://pair.example/pin/");
 }
 
+// fenrir's QR code (XERK-2812). The vectors are fenrir's TestVRPairingLink.
+void test_pairing_link()
+{
+	const std::string key = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+	auto l = fenrir::parse_pairing_link("fenrir-vr://fenrir.local:47990?key=" + key);
+	CHECK(l and l->host == "fenrir.local" and l->port == 47990 and l->server_key_sha256 == key);
+	l = fenrir::parse_pairing_link("fenrir-vr://[fd00::1]:443?key=" + key);
+	CHECK(l and l->host == "fd00::1" and l->port == 443);
+	l = fenrir::parse_pairing_link("fenrir-vr://192.168.1.10:47990/?v=2&key=" + key + "&name=x");
+	CHECK(l and l->host == "192.168.1.10");
+	// Stored lowercase, as to_hex writes and pins compare
+	std::string upper = key;
+	for (auto & c: upper)
+		c = std::toupper((unsigned char)c);
+	l = fenrir::parse_pairing_link("fenrir-vr://a:1?key=" + upper);
+	CHECK(l and l->server_key_sha256 == key);
+
+	for (const std::string & bad: std::vector<std::string>{
+	             "",
+	             "https://fenrir.local:47990?key=" + key,
+	             "FENRIR-VR://fenrir.local:47990?key=" + key,
+	             "fenrir-vr://fenrir.local:47990",
+	             "fenrir-vr://fenrir.local:47990?key=",
+	             "fenrir-vr://fenrir.local:47990?key=" + key.substr(2),
+	             "fenrir-vr://fenrir.local:47990?key=" + key + "00",
+	             "fenrir-vr://fenrir.local:47990?key=" + key + "&key=" + key,
+	             "fenrir-vr://fenrir.local?key=" + key,
+	             "fenrir-vr://:47990?key=" + key,
+	             "fenrir-vr://fenrir.local:0?key=" + key,
+	             "fenrir-vr://fenrir.local:65536?key=" + key,
+	             "fenrir-vr://fenrir.local:+80?key=" + key,
+	             "fenrir-vr://fenrir.local:999999?key=" + key,
+	             "fenrir-vr://user@fenrir.local:47990?key=" + key,
+	             "fenrir-vr://fenrir.local/x:47990?key=" + key,
+	             "fenrir-vr://fenrir.local:47990/pair?key=" + key,
+	             "fenrir-vr://fd00::1:47990?key=" + key,
+	             "fenrir-vr://[fd00::1]?key=" + key,
+	             "fenrir-vr://[fd00::1]47990?key=" + key,
+	             "fenrir-vr://[]:47990?key=" + key,
+	             "fenrir-vr://[fe80::1%wlan0]:47990?key=" + key,
+	             "fenrir-vr://[fe80::1%1]:47990?key=" + key,
+	             "fenrir-vr://" + std::string(254, 'a') + ":1?key=" + key,
+	     })
+	{
+		if (fenrir::parse_pairing_link(bad))
+		{
+			std::cerr << "accepted: " << bad << "\n";
+			++failures;
+		}
+	}
+
+	// A server added from a link is pinned before /pair: no key check (XERK-2813)
+	l = fenrir::parse_pairing_link("fenrir-vr://fenrir.local:47990?key=" + key);
+	fenrir::server srv{.id = "q", .host = l->host, .port = l->port, .server_key_sha256 = l->server_key_sha256};
+	CHECK(fenrir::finish_pairing(srv) == fenrir::pairing_outcome::paired);
+}
+
 void test_hex()
 {
 	CHECK(fenrir::to_hex(std::vector<uint8_t>{0x00, 0xab, 0xff}) == "00abff");
@@ -656,6 +713,7 @@ int main()
 
 	test_pairing_code();
 	test_hex();
+	test_pairing_link();
 	test_first_pairing();
 	test_tls_identity();
 	test_wivrn_key_body();

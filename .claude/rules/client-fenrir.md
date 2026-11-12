@@ -4,6 +4,8 @@ paths:
   - client/tests/fenrir_ut.cpp
   - client/scenes/lobby_gui_fenrir.cpp
   - client/wivrn_client.*
+  - client/android/qr_*
+  - client/tests/qr_ut.cpp
 ---
 # fenrir front door client (XERK-2809)
 
@@ -49,3 +51,13 @@ paths:
 - Background calls copy the server entry and never touch the lobby: `utils::future` threads can
   outlive it. Cancel goes through the curl progress callback.
 - The wire protocol is unchanged, so the protocol hash is too.
+- fenrir's pairing page QR code (XERK-2812) is `fenrir-vr://<host>:<port>?key=<64 hex SPKI hash>`:
+  `parse_pairing_link` must stay equal to fenrir's `vrPairingLink`. Tests: `test_pairing_link`.
+  - The parser is strict (host charset, one key): camera input is untrusted, and the host lands
+    in a curl URL and in `fenrir.json`.
+  - `qr_ut` decodes `client/tests/data/fenrir_qr.pgm`, fenrir's `vrQRCode` of the test vector:
+    regenerate it if fenrir's rendering changes. LeakSanitizer needs ptrace, so in a pod run the
+    tests with `ASAN_OPTIONS=detect_leaks=0`.
+- The passthrough camera gives images only while passthrough is on: `passthrough_on()` forces it
+  while `fenrir_scanner` exists. Only `horizonos.permission.HEADSET_CAMERA` is asked: with it
+  Horizon OS lists only passthrough cameras (`camera_source` tag 0x80004d00 preferred).

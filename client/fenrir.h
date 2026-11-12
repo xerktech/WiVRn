@@ -122,6 +122,20 @@ std::string format_code(std::string_view code);
 // Keep the two in step. The user compares it before a first pairing's key is pinned (XERK-2813).
 std::string key_fingerprint(const std::array<uint8_t, 32> & key);
 
+// What fenrir's pairing page QR code carries (pkg/moonlight/pinpage.go vrPairingLink, XERK-2812):
+// fenrir-vr://<host>:<port>?key=<SHA-256 of the front door's SPKI, 64 hex digits>, an IPv6 host
+// in brackets. The key is pinned before the first /pair, so no fingerprint check is needed: the
+// page is behind Authentik, so only fenrir can show it. Keep the two in step.
+struct pairing_link
+{
+	std::string host; // without brackets
+	int port = 0;
+	std::string server_key_sha256; // lowercase hex
+};
+// nullopt for anything else a camera might read: another scheme, no or a malformed key, a bad
+// host or port. Unknown query parameters are ignored, so fenrir can add some.
+std::optional<pairing_link> parse_pairing_link(std::string_view text);
+
 // What a finished pairing does to srv (XERK-2813). With a key pinned before /pair, every request
 // used it: the server is paired now. With nothing pinned, whoever answered may not be fenrir, so
 // srv is left unchanged until the user matches the key with fenrir's pairing page (accept_key).

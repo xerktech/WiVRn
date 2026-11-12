@@ -1145,11 +1145,12 @@ void scenes::lobby::render(const XrFrameState & frame_state)
 
 	renderer::animate(world, frame_state.predictedDisplayPeriod * 1.0e-9);
 
-	world.get<components::node>(lobby_entity).visible = not application::get_config().passthrough_enabled;
+	const bool passthrough = passthrough_on();
+	world.get<components::node>(lobby_entity).visible = not passthrough;
 
-	render_start(application::get_config().passthrough_enabled, frame_state.predictedDisplayTime);
+	render_start(passthrough, frame_state.predictedDisplayTime);
 
-	const XrColor4f clear_color = application::get_config().passthrough_enabled ? XrColor4f{0, 0, 0, 0} : constants::lobby::sky_color;
+	const XrColor4f clear_color = passthrough ? XrColor4f{0, 0, 0, 0} : constants::lobby::sky_color;
 	render_world(
 	        XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT,
 	        world_space,
@@ -1436,9 +1437,18 @@ void scenes::lobby::on_focused()
 	session.set_performance_level(XR_PERF_SETTINGS_DOMAIN_GPU_EXT, XR_PERF_SETTINGS_LEVEL_SUSTAINED_HIGH_EXT);
 }
 
+bool scenes::lobby::passthrough_on() const
+{
+#ifdef __ANDROID__
+	if (fenrir_scanner)
+		return true;
+#endif
+	return application::get_config().passthrough_enabled;
+}
+
 void scenes::lobby::setup_passthrough()
 {
-	if (application::get_config().passthrough_enabled)
+	if (passthrough_on())
 		session.enable_passthrough(system);
 	else
 		session.disable_passthrough();
@@ -1447,6 +1457,9 @@ void scenes::lobby::setup_passthrough()
 void scenes::lobby::on_unfocused()
 {
 	discover.reset();
+#ifdef __ANDROID__
+	fenrir_scanner.reset(); // the camera is not needed behind a stream
+#endif
 
 	renderer->wait_idle(); // Must be before the scene data because the renderer uses its descriptor sets
 

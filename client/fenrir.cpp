@@ -295,6 +295,72 @@ std::string pairing_url_to_show(const server & srv, std::string_view url)
 	return std::string{url};
 }
 
+std::optional<pairing_link> parse_pairing_link(std::string_view text)
+{
+	constexpr std::string_view scheme = "fenrir-vr://";
+	if (not text.starts_with(scheme))
+		return std::nullopt;
+	text.remove_prefix(scheme.size());
+
+	auto q = text.find('?');
+	if (q == std::string_view::npos)
+		return std::nullopt;
+	std::string_view authority = text.substr(0, q);
+	std::string_view query = text.substr(q + 1);
+	if (authority.ends_with('/'))
+		authority.remove_suffix(1);
+
+	pairing_link link;
+	std::string_view port;
+	if (authority.starts_with('['))
+	{
+		auto end = authority.find(']');
+		if (end == std::string_view::npos or end + 1 >= authority.size() or authority[end + 1] != ':')
+			return std::nullopt;
+		link.host = authority.substr(1, end - 1);
+		port = authority.substr(end + 2);
+		if (link.host.empty() or not std::ranges::all_of(link.host, [](char c) { return std::isxdigit((unsigned char)c) or c == ':' or c == '.'; }))
+			return std::nullopt;
+	}
+	else
+	{
+		auto colon = authority.rfind(':');
+		if (colon == std::string_view::npos)
+			return std::nullopt;
+		link.host = authority.substr(0, colon);
+		port = authority.substr(colon + 1);
+		// A DNS name or an IPv4 address: nothing a URL or a JSON file could read differently
+		if (link.host.empty() or not std::ranges::all_of(link.host, [](char c) { return std::isalnum((unsigned char)c) or c == '.' or c == '-'; }))
+			return std::nullopt;
+	}
+	if (link.host.size() > 253 or port.empty() or port.size() > 5 or not std::ranges::all_of(port, [](char c) { return c >= '0' and c <= '9'; }))
+		return std::nullopt;
+	link.port = std::stoi(std::string{port});
+	if (link.port < 1 or link.port > 65535)
+		return std::nullopt;
+
+	bool have_key = false;
+	while (not query.empty())
+	{
+		auto amp = query.find('&');
+		std::string_view param = query.substr(0, amp);
+		query = amp == std::string_view::npos ? std::string_view{} : query.substr(amp + 1);
+		if (not param.starts_with("key="))
+			continue;
+		// Two keys could mean two different servers: trust neither
+		if (have_key)
+			return std::nullopt;
+		auto key = from_hex(param.substr(4));
+		if (not key or key->size() != 32)
+			return std::nullopt;
+		link.server_key_sha256 = to_hex(*key);
+		have_key = true;
+	}
+	if (not have_key)
+		return std::nullopt;
+	return link;
+}
+
 // Store
 
 store store::load(const std::filesystem::path & path)
