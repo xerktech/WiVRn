@@ -106,6 +106,11 @@ std::string pairing_code(
 // "12345678" -> "1234 5678", for reading out
 std::string format_code(std::string_view code);
 
+// A front door key as fenrir's pairing page shows it (pkg/moonlight/vrdoor.go vrKeyFingerprint):
+// the first 16 bytes of its SPKI SHA-256, lowercase hex, in groups of 4 separated by spaces.
+// Keep the two in step. The user compares it before a first pairing's key is pinned (XERK-2813).
+std::string key_fingerprint(const std::array<uint8_t, 32> & key);
+
 // An HTTP error from the front door: its status and its {"error"} text. status is 0 when no reply
 // arrived (network, TLS, or a pinned-key mismatch).
 struct api_error : std::runtime_error

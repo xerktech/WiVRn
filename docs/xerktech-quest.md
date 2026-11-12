@@ -78,6 +78,8 @@ fenrir's VR front door (fenrir `docs/vr-native-session.md`) replaces the per-ses
 1. Lobby → Computers → fenrir → "Add fenrir server": the front door's address and port
    (moonlight-proxy `--vr-port`).
 2. The headset shows an 8-digit code and the pairing page's URL. Sign in there and enter the code.
+   The headset then shows the server's key: tap "Keys match" only if it is exactly the key the
+   pairing page shows. Anything else is not fenrir answering (XERK-2813), so tap "Keys differ".
 3. "Games" lists the account's VR Apps. Picking one starts its session (about 15-20 s), then the
    stream connects with no PIN: the session's WiVRn key comes from the paired API and is pinned.
 4. "Stop game" ends the session. Deleting the headset in fenrir revokes it: the headset then says

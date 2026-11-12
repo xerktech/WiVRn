@@ -248,6 +248,8 @@ void scenes::lobby::fenrir_start(fenrir_op_kind kind, std::string app_id)
 
 	fenrir_op.cancel();
 	fenrir_error.reset();
+	fenrir_key_check.reset();
+	fenrir_key_rejected = false;
 	fenrir_op_running = kind;
 
 	using R = fenrir_result;
@@ -305,6 +307,13 @@ void scenes::lobby::fenrir_poll()
 				break;
 
 			case fenrir_op_kind::pairing:
+				// Nothing pinned before this pairing: whoever answered may not be fenrir. Pin
+				// only once the user matched the key with fenrir's pairing page.
+				if (srv->server_key_sha256.empty())
+				{
+					fenrir_key_check = r.server_key;
+					break;
+				}
 				srv->server_key_sha256 = fenrir::to_hex(r.server_key);
 				srv->paired = true;
 				// Keep the save error on screen: the pairing would be lost at restart
@@ -472,6 +481,8 @@ void scenes::lobby::gui_fenrir_window()
 	auto close = [&] {
 		fenrir_op.cancel();
 		fenrir_op_running = fenrir_op_kind::none;
+		fenrir_key_check.reset();
+		fenrir_key_rejected = false;
 		fenrir_current.clear();
 		ImGui::CloseCurrentPopup();
 	};
@@ -516,6 +527,51 @@ void scenes::lobby::gui_fenrir_window()
 				break;
 		}
 		return;
+	}
+
+	// A first pairing finished: the user matches the key with fenrir's pairing page before it is
+	// pinned. The code alone proves nothing here, as a fake front door computes it too.
+	if (fenrir_key_check)
+	{
+		ImGui::TextWrapped("%s", _S("Check this server's key. fenrir's VR headset pairing page shows its key: it must be exactly this one."));
+		ImGui::Dummy({0, 12});
+		const std::string fp = fenrir::key_fingerprint(*fenrir_key_check);
+		ImGui::PushFont(nullptr, style.FontSizeBase * 2);
+		for (const std::string & line: {fp.substr(0, 19), fp.substr(20)})
+		{
+			ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(line.c_str()).x) / 2);
+			ImGui::TextUnformatted(line.c_str());
+		}
+		ImGui::PopFont();
+		ImGui::Dummy({0, 12});
+		ImGui::PushStyleColor(ImGuiCol_Text, t.text_muted);
+		ImGui::TextWrapped("%s", _S("If any group differs, something on your network answered instead of fenrir: do not use it."));
+		ImGui::PopStyleColor();
+		ImGui::Dummy({0, 12});
+		switch (right_buttons({{_("Keys differ"), ui::button_style::danger}, {_("Keys match"), ui::button_style::primary}}))
+		{
+			case 0:
+				fenrir_key_check.reset();
+				fenrir_key_rejected = true;
+				break;
+			case 1:
+				srv->server_key_sha256 = fenrir::to_hex(*fenrir_key_check);
+				srv->paired = true;
+				fenrir_key_check.reset();
+				// Keep the save error on screen: the pairing would be lost at restart
+				if (fenrir_save())
+					fenrir_start(fenrir_op_kind::loading);
+				break;
+		}
+		return;
+	}
+
+	if (fenrir_key_rejected)
+	{
+		ImGui::PushStyleColor(ImGuiCol_Text, t.text_muted);
+		ImGui::TextWrapped("%s %s", ICON_FA_CIRCLE_EXCLAMATION, _S("Not paired: that key was not fenrir's. Check the address, then pair again."));
+		ImGui::PopStyleColor();
+		ImGui::Dummy({0, 12});
 	}
 
 	if (fenrir_error)

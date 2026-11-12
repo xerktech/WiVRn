@@ -307,6 +307,11 @@ private:
 	std::string fenrir_add_host;
 	int fenrir_add_port = 0;
 	std::string fenrir_delete; // server pending a delete confirmation
+	// A first pairing's server key, shown for the user to match against fenrir's pairing page
+	// before it is pinned (XERK-2813): a fake front door can answer the confirm by itself, so a
+	// 200 proves nothing. Set only when nothing was pinned before the pairing started.
+	std::optional<std::array<uint8_t, 32>> fenrir_key_check;
+	bool fenrir_key_rejected = false;
 
 	fenrir::server * fenrir_server();
 	bool fenrir_save();

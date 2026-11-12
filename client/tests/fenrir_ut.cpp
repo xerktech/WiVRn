@@ -87,6 +87,8 @@ void test_pairing_code()
 	CHECK(fenrir::pairing_code(sk, ck, "key", sn, flip(hn)) != base);
 
 	CHECK(fenrir::format_code("01234567") == "0123 4567");
+	// fenrir's TestVRKeyFingerprint vector: SHA-256 of ""
+	CHECK(fenrir::key_fingerprint(fenrir::sha256("")) == "e3b0 c442 98fc 1c14 9afb f4c8 996f b924");
 }
 
 void test_hex()

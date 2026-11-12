@@ -17,6 +17,11 @@ paths:
     either request makes the codes differ.
   - Session reuse is off: a resumed TLS session carries no certificate to pin or read.
 - The pin is saved only once pairing succeeds, so a relayed first attempt leaves nothing behind.
+- A confirm 200 proves nothing to the headset: a fake front door computes the code too and can
+  answer at once (XERK-2813). A first pairing (nothing pinned before it) is pinned only after the
+  user matches `key_fingerprint` with the one fenrir's pairing page shows; never auto-accept.
+  A key pinned before `/pair` (a QR, XERK-2812) needs no check. `key_fingerprint` must stay equal
+  to fenrir's `vrKeyFingerprint`; `test_pairing_code` holds its vector.
 - The TLS key never leaves the headset: only the certificate goes out, in the handshake.
 - `fenrir.json` is separate from `client.json` so one damaged file never loses the other.
   - Damaged: moved to `.bad-<seconds>`. Unreadable (I/O): the lobby never saves over it.
