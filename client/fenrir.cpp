@@ -274,6 +274,9 @@ store store::load(const std::filesystem::path & path)
 		simdjson::dom::parser parser;
 		simdjson::dom::element root = parser.load(path.native());
 		simdjson::dom::array servers = root["servers"];
+		for (auto [key, value]: simdjson::dom::object(root))
+			if (key != "servers")
+				s.extra += "," + json_string(key) + ":" + simdjson::minify(value);
 		for (simdjson::dom::element entry: servers)
 		{
 			try
@@ -292,8 +295,19 @@ store store::load(const std::filesystem::path & path)
 				        .server_key_sha256 = get_string(o, "server_key_sha256"),
 				        .paired = o["paired"].get_bool(),
 				};
+				// Present means a string: any other type makes the entry unparsed, not dropped
+				if (auto pending = o["pending_server_key_sha256"]; pending.error() != simdjson::NO_SUCH_FIELD)
+					srv.pending_server_key_sha256 = (std::string)pending;
+				for (auto [key, value]: o)
+				{
+					static constexpr std::string_view known[] = {"id", "name", "host", "port", "tls_key", "tls_cert", "server_key_sha256", "paired", "pending_server_key_sha256"};
+					if (std::ranges::find(known, key) == std::end(known))
+						srv.extra += "," + json_string(key) + ":" + simdjson::minify(value);
+				}
 				if (srv.id.empty() or srv.host.empty() or srv.tls_key.empty() or srv.tls_cert.empty())
 					throw std::runtime_error("incomplete entry");
+				if (not srv.pending_server_key_sha256.empty())
+					parse_hex32(srv.pending_server_key_sha256);
 				if (not srv.server_key_sha256.empty())
 					parse_hex32(srv.server_key_sha256);
 				else if (srv.paired)
@@ -348,7 +362,10 @@ void store::save(const std::filesystem::path & path) const
 		     << ",\"tls_key\":" << json_string(srv.tls_key)
 		     << ",\"tls_cert\":" << json_string(srv.tls_cert)
 		     << ",\"server_key_sha256\":" << json_string(srv.server_key_sha256)
-		     << ",\"paired\":" << (srv.paired ? "true" : "false") << "}";
+		     << ",\"paired\":" << (srv.paired ? "true" : "false");
+		if (not srv.pending_server_key_sha256.empty())
+			json << ",\"pending_server_key_sha256\":" << json_string(srv.pending_server_key_sha256);
+		json << srv.extra << "}";
 	}
 	for (const auto & entry: unparsed)
 	{
@@ -357,7 +374,7 @@ void store::save(const std::filesystem::path & path) const
 		first = false;
 		json << entry;
 	}
-	json << "]}";
+	json << "]" << extra << "}";
 	wivrn::write_private_file(path, json.str());
 }
 

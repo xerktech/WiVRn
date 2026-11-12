@@ -54,6 +54,15 @@ struct server
 	// exchange that the code authenticates, and enforced on every later connection.
 	std::string server_key_sha256;
 	bool paired = false;
+
+	// The key the last /pair saw, saved before the code is shown, so pairing that completed on
+	// fenrir but was not saved here (the app died) can be recovered. Never trusted on its own:
+	// only adopted once a pinned call to it succeeds after fenrir says the headset is paired.
+	std::string pending_server_key_sha256;
+
+	// Members this version does not know, as ,"key":value pairs, written back by save() so a
+	// newer version's fields survive an older one
+	std::string extra;
 };
 
 struct store
@@ -61,6 +70,8 @@ struct store
 	std::vector<server> servers;
 	// Entries that could not be parsed, as minified JSON, written back by save()
 	std::vector<std::string> unparsed;
+	// Top-level members other than "servers", as ,"key":value pairs, written back by save()
+	std::string extra;
 
 	// A missing file is an empty store. A file that cannot be parsed is moved aside to
 	// <path>.bad-<unix seconds>, never overwritten by the next save().
