@@ -117,6 +117,26 @@ std::string pairing_code(
 // "12345678" -> "1234 5678", for reading out
 std::string format_code(std::string_view code);
 
+// A front door key as fenrir's pairing page shows it (pkg/moonlight/vrdoor.go vrKeyFingerprint):
+// the first 16 bytes of its SPKI SHA-256, lowercase hex, in groups of 4 separated by spaces.
+// Keep the two in step. The user compares it before a first pairing's key is pinned (XERK-2813).
+std::string key_fingerprint(const std::array<uint8_t, 32> & key);
+
+// What a finished pairing does to srv (XERK-2813). With a key pinned before /pair, every request
+// used it: the server is paired now. With nothing pinned, whoever answered may not be fenrir, so
+// srv is left unchanged until the user matches the key with fenrir's pairing page (accept_key).
+enum class pairing_outcome
+{
+	paired,
+	check_key,
+};
+pairing_outcome finish_pairing(server & srv);
+void accept_key(server & srv, const std::array<uint8_t, 32> & key);
+
+// The pairing page URL to show beside the code: none on a first pairing, where it would come from
+// a server not yet known to be fenrir, which could send the user to its own page and key.
+std::string pairing_url_to_show(const server & srv, std::string_view url);
+
 // An HTTP error from the front door: its status and its {"error"} text. status is 0 when no reply
 // arrived (network, TLS, or a pinned-key mismatch).
 struct api_error : std::runtime_error

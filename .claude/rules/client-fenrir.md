@@ -16,11 +16,24 @@ paths:
   - `/pair/confirm` must be pinned to the key `/pair` saw: the code binds that key, so a relay on
     either request makes the codes differ.
   - Session reuse is off: a resumed TLS session carries no certificate to pin or read.
-- The pin is saved only once confirm succeeds, so a relay that fenrir refuses leaves nothing behind.
-  - A first-pairing relay that answers confirm's 200 itself is still pinned: XERK-2816.
-  - The key `/pair` saw is saved as `pending_server_key_sha256` before the code shows. It is used
-    only after `/pair` answers 409 (already paired): a pinned `GET /apps` to it must succeed before
-    it is adopted. That recovers a pairing fenrir completed while the app died before saving.
+- The pin is saved only once pairing succeeds, so a relayed first attempt leaves nothing behind.
+- A confirm 200 proves nothing to the headset: a fake front door computes the code too and can
+  answer at once (XERK-2813). A first pairing (nothing pinned before it) is pinned only after the
+  user matches `key_fingerprint` with the one fenrir's pairing page shows; never auto-accept.
+  A key pinned before `/pair` (a QR, XERK-2812) needs no check. `key_fingerprint` must stay equal
+  to fenrir's `vrKeyFingerprint`; `test_pairing_code` holds its vector.
+  - The decision is `finish_pairing` / `accept_key` in `fenrir.cpp` so `test_first_pairing` and
+    `test_fake_front_door` hold it: the lobby is in no test gate.
+  - A first pairing shows no server-sent `pairingURL` (`pairing_url_to_show`): a fake door would
+    send the user to its own page, showing its own key. The check text says to open the page
+    the usual way.
+  - A rejected key leaves fenrir's Headset in place, so pairing that entry again gets 409 for
+    good: with nothing pinned the 409 text says to delete and re-add the server (a new TLS key).
+- The key `/pair` saw is saved as `pending_server_key_sha256` before the code shows. It is used
+  only after `/pair` answers 409 (already paired): a pinned `GET /apps` to it must succeed. That
+  recovers a pairing fenrir completed while the app died before saving.
+  - A fake door answers that `GET /apps` too, so an unpinned entry's recovered key still goes
+    through the user's key check. Rejecting a key clears it; `accept_key` clears it.
 - Tests: `test_tls_pin` runs a real TLS 1.3 server: a mutation that ignores or mis-reads the pin
   must fail it. It needs SIGPIPE ignored (`main` does it), else a refused pin kills the process.
 - The TLS key never leaves the headset: only the certificate goes out, in the handshake.

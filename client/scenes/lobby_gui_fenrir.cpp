@@ -152,7 +152,7 @@ scenes::lobby::fenrir_result pair(token_t & token, fenrir::server srv, std::stri
 	}
 
 	auto code = fenrir::pairing_code(reply.server_key, fenrir::certificate_key_sha256(srv.tls_cert), wivrn_key, reply.server_nonce, nonce);
-	token.set_progress({.status = _("Waiting for the code to be entered"), .code = code, .url = reply.pairing_url, .server_key = fenrir::to_hex(reply.server_key)});
+	token.set_progress({.status = _("Waiting for the code to be entered"), .code = code, .url = fenrir::pairing_url_to_show(srv, reply.pairing_url), .server_key = fenrir::to_hex(reply.server_key)});
 
 	try
 	{
@@ -215,8 +215,9 @@ scenes::lobby::fenrir_result stop(token_t & token, fenrir::server srv)
 	return load(token, srv);
 }
 
-std::string error_text(const fenrir::api_error & e, const std::string & server_name)
+std::string error_text(const fenrir::api_error & e, const fenrir::server & srv)
 {
+	const std::string & server_name = srv.name;
 	switch (e.status)
 	{
 		case 401:
@@ -224,6 +225,10 @@ std::string error_text(const fenrir::api_error & e, const std::string & server_n
 		case 408:
 			return _("Nobody entered the code in time. Start pairing again.");
 		case 409:
+			// fenrir paired this headset, but it never kept the key (rejected, or the app quit
+			// while it was shown): pairing this entry again can only get 409
+			if (srv.server_key_sha256.empty())
+				return fmt::format(_F("{} already has this headset paired, but this headset never kept its key. Delete this server here, remove the old headset in fenrir, then add the server again."), server_name);
 			return fmt::format(_F("Busy: {}"), e.what());
 		default:
 			return e.what();
@@ -270,6 +275,8 @@ void scenes::lobby::fenrir_start(fenrir_op_kind kind, std::string app_id)
 
 	fenrir_op.cancel();
 	fenrir_error.reset();
+	fenrir_key_check.reset();
+	fenrir_key_rejected = false;
 	fenrir_op_running = kind;
 
 	using R = fenrir_result;
@@ -340,9 +347,15 @@ void scenes::lobby::fenrir_poll()
 				break;
 
 			case fenrir_op_kind::pairing:
-				srv->server_key_sha256 = fenrir::to_hex(r.server_key);
+				// Nothing pinned before this pairing (a 409 recovery of the pending key included):
+				// whoever answered may not be fenrir. Pin only once the user matched the key with
+				// fenrir's pairing page.
+				if (fenrir::finish_pairing(*srv) == fenrir::pairing_outcome::check_key)
+				{
+					fenrir_key_check = r.server_key;
+					break;
+				}
 				srv->pending_server_key_sha256.clear();
-				srv->paired = true;
 				// Keep the save error on screen: the pairing would be lost at restart
 				if (fenrir_save())
 					fenrir_start(fenrir_op_kind::loading);
@@ -508,6 +521,8 @@ void scenes::lobby::gui_fenrir_window()
 	auto close = [&] {
 		fenrir_op.cancel();
 		fenrir_op_running = fenrir_op_kind::none;
+		fenrir_key_check.reset();
+		fenrir_key_rejected = false;
 		fenrir_current.clear();
 		ImGui::CloseCurrentPopup();
 	};
@@ -554,10 +569,60 @@ void scenes::lobby::gui_fenrir_window()
 		return;
 	}
 
+	// A first pairing finished: the user matches the key with fenrir's pairing page before it is
+	// pinned. The code alone proves nothing here, as a fake front door computes it too.
+	if (fenrir_key_check)
+	{
+		ImGui::TextWrapped("%s", _S("Check this server's key. Open fenrir's pairing page the way you always do, signed in to your account, never from a link this headset showed: it shows fenrir's key, which must be exactly this one."));
+		ImGui::Dummy({0, 12});
+		const std::string fp = fenrir::key_fingerprint(*fenrir_key_check);
+		ImGui::PushFont(nullptr, style.FontSizeBase * 2);
+		for (const std::string & line: {fp.substr(0, 19), fp.substr(20)})
+		{
+			ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(line.c_str()).x) / 2);
+			ImGui::TextUnformatted(line.c_str());
+		}
+		ImGui::PopFont();
+		ImGui::Dummy({0, 12});
+		ImGui::PushStyleColor(ImGuiCol_Text, t.text_muted);
+		ImGui::TextWrapped("%s", _S("If any group differs, something on your network answered instead of fenrir: do not use it."));
+		ImGui::PopStyleColor();
+		ImGui::Dummy({0, 12});
+		switch (right_buttons({{_("Keys differ"), ui::button_style::danger}, {_("Keys match"), ui::button_style::primary}}))
+		{
+			case 0:
+				fenrir_key_check.reset();
+				fenrir_key_rejected = true;
+				// Never offer a rejected key again through the 409 recovery
+				if (not srv->pending_server_key_sha256.empty())
+				{
+					srv->pending_server_key_sha256.clear();
+					fenrir_save();
+				}
+				break;
+			case 1:
+				fenrir::accept_key(*srv, *fenrir_key_check);
+				fenrir_key_check.reset();
+				// Keep the save error on screen: the pairing would be lost at restart
+				if (fenrir_save())
+					fenrir_start(fenrir_op_kind::loading);
+				break;
+		}
+		return;
+	}
+
+	if (fenrir_key_rejected)
+	{
+		ImGui::PushStyleColor(ImGuiCol_Text, t.text_muted);
+		ImGui::TextWrapped("%s %s", ICON_FA_CIRCLE_EXCLAMATION, _S("Not paired: that key was not fenrir's. Check the address, then pair again. If pairing then says this headset is already paired, delete this server here and add it again."));
+		ImGui::PopStyleColor();
+		ImGui::Dummy({0, 12});
+	}
+
 	if (fenrir_error)
 	{
 		ImGui::PushStyleColor(ImGuiCol_Text, t.text_muted);
-		ImGui::TextWrapped("%s %s", ICON_FA_CIRCLE_EXCLAMATION, error_text(*fenrir_error, srv->name).c_str());
+		ImGui::TextWrapped("%s %s", ICON_FA_CIRCLE_EXCLAMATION, error_text(*fenrir_error, *srv).c_str());
 		ImGui::PopStyleColor();
 		ImGui::Dummy({0, 12});
 	}
