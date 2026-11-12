@@ -136,8 +136,9 @@ scenes::lobby::fenrir_result pair(token_t & token, fenrir::server srv, std::stri
 		{
 			if (e.status == 409)
 			{
-				// Already paired: an earlier pairing completed on fenrir but the app stopped
-				// before saving it. Adopt the key that pairing saw, once a pinned call proves it.
+				// Already paired on fenrir while this entry says otherwise (cancel racing the
+				// confirm, a lost save, the app dying before it): adopt the pinned key, else the
+				// key the last /pair saw, once a pinned call to it admits this headset
 				if (auto key = recover_pairing(token, srv))
 					return {.server_key = *key};
 				throw;
@@ -237,18 +238,20 @@ fenrir::server * scenes::lobby::fenrir_server()
 	return fenrir_store->find(fenrir_current);
 }
 
-void scenes::lobby::fenrir_save()
+bool scenes::lobby::fenrir_save()
 {
 	if (not fenrir_store)
-		return;
+		return false;
 	try
 	{
 		fenrir_store->save(store_path());
+		return true;
 	}
 	catch (std::exception & e)
 	{
 		spdlog::error("Cannot save {}: {}", store_path().native(), e.what());
 		fenrir_error = fenrir::api_error(0, fmt::format(_F("Cannot save the fenrir servers: {}"), e.what()));
+		return false;
 	}
 }
 
@@ -279,7 +282,7 @@ void scenes::lobby::fenrir_start(fenrir_op_kind kind, std::string app_id)
 		case fenrir_op_kind::pairing:
 			fenrir_op = utils::async<R, P>(
 			        [](auto token, fenrir::server srv, std::string key, std::string name) { return pair(token, srv, key, name); },
-			        fenrir::server{*srv}, // a copy: std::thread passes rvalues
+			        fenrir::server{*srv},
 			        fenrir::wivrn_key_body(keypair.public_key()),
 			        application::get_hmd_traits().model_name());
 			break;
@@ -293,9 +296,9 @@ void scenes::lobby::fenrir_start(fenrir_op_kind kind, std::string app_id)
 					title = a.title;
 			fenrir_op = utils::async<R, P>(
 			        [](auto token, fenrir::server srv, std::string id, std::string title) { return launch(token, srv, id, title); },
-			        fenrir::server{*srv}, // a copy: std::thread passes rvalues
-			        std::move(app_id),
-			        std::move(title));
+			        fenrir::server{*srv},
+			        std::string{app_id},
+			        std::string{title});
 			break;
 		}
 		case fenrir_op_kind::stopping:
@@ -340,8 +343,9 @@ void scenes::lobby::fenrir_poll()
 				srv->server_key_sha256 = fenrir::to_hex(r.server_key);
 				srv->pending_server_key_sha256.clear();
 				srv->paired = true;
-				fenrir_save();
-				fenrir_start(fenrir_op_kind::loading);
+				// Keep the save error on screen: the pairing would be lost at restart
+				if (fenrir_save())
+					fenrir_start(fenrir_op_kind::loading);
 				break;
 
 			case fenrir_op_kind::loading:
@@ -534,12 +538,15 @@ void scenes::lobby::gui_fenrir_window()
 			buttons.emplace_back(ui::icon_label(ICON_FA_STOP, _("Stop game")), ui::button_style::danger);
 		switch (right_buttons(buttons))
 		{
-			case 0:
+			case 0: {
+				auto kind = std::exchange(fenrir_op_running, fenrir_op_kind::none);
 				fenrir_op.cancel();
-				fenrir_op_running = fenrir_op_kind::none;
 				if (not srv->paired)
 					close();
+				else if (kind == fenrir_op_kind::pairing)
+					fenrir_start(fenrir_op_kind::loading); // back to the list, or to its error
 				break;
+			}
 			case 1:
 				fenrir_start(fenrir_op_kind::stopping);
 				break;

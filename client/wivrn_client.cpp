@@ -153,7 +153,9 @@ void wivrn_session::handshake(T address, bool tcp_only, crypto::key & headset_ke
 	if (pinned)
 	{
 		// Checked before anything else: a server that is not the one fenrir started gets nothing
-		if (not server_identity or fenrir::from_hex(pinned_identity) != server_identity.raw_public_key())
+		// Other states (incompatible version, key error...) carry no key: their own error below
+		if (crypto_handshake.state == to_headset::crypto_handshake::crypto_state::encryption_disabled or
+		    (server_identity and fenrir::from_hex(pinned_identity) != server_identity.raw_public_key()))
 		{
 			spdlog::warn("Server identity key does not match the pinned key, refusing to connect");
 			throw std::runtime_error(_("The server's identity key is not the one fenrir reported for this session, refusing to connect"));
