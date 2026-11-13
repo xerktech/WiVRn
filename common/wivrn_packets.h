@@ -249,6 +249,65 @@ struct audio_data
 	data_holder data;
 };
 
+// Force-feedback effect for a wheel, modeled on Linux struct ff_effect (linux/input.h).
+// Codes and units are the kernel's: type is FF_CONSTANT/FF_SPRING/..., levels are signed 16-bit,
+// direction is 0..0xffff for 0..360 degrees, lengths and delays are in ms.
+struct wheel_ff_envelope
+{
+	uint16_t attack_length;
+	uint16_t attack_level;
+	uint16_t fade_length;
+	uint16_t fade_level;
+};
+
+struct wheel_ff_effect
+{
+	struct constant
+	{
+		int16_t level;
+		wheel_ff_envelope envelope;
+	};
+	struct ramp
+	{
+		int16_t start_level;
+		int16_t end_level;
+		wheel_ff_envelope envelope;
+	};
+	// Custom waveforms (FF_CUSTOM) are not forwarded
+	struct periodic
+	{
+		uint16_t waveform;
+		uint16_t period;
+		int16_t magnitude;
+		int16_t offset;
+		uint16_t phase;
+		wheel_ff_envelope envelope;
+	};
+	// FF_SPRING, FF_DAMPER, FF_FRICTION, FF_INERTIA: one per axis
+	struct condition
+	{
+		uint16_t right_saturation;
+		uint16_t left_saturation;
+		int16_t right_coeff;
+		int16_t left_coeff;
+		uint16_t deadband;
+		int16_t center;
+	};
+	struct rumble
+	{
+		uint16_t strong_magnitude;
+		uint16_t weak_magnitude;
+	};
+
+	uint16_t type;
+	uint16_t direction;
+	uint16_t trigger_button;
+	uint16_t trigger_interval;
+	uint16_t replay_length;
+	uint16_t replay_delay;
+	std::variant<constant, ramp, periodic, std::array<condition, 2>, rumble> u;
+};
+
 namespace from_headset
 {
 struct crypto_handshake
@@ -720,6 +779,49 @@ struct stop_application
 	uint32_t id;
 };
 
+// A wheel plugged into the headset. Codes are Linux input codes (ABS_*, BTN_*, FF_*).
+// id is chosen by the headset and unique among its connected wheels.
+struct wheel_added
+{
+	struct axis
+	{
+		uint16_t code;
+		int32_t min;
+		int32_t max;
+		int32_t fuzz;
+		int32_t flat;
+	};
+	uint8_t id;
+	uint16_t vendor;
+	uint16_t product;
+	uint16_t version;
+	std::string name;
+	std::vector<axis> axes;
+	std::vector<uint16_t> keys;
+	// Supported effect types plus FF_GAIN / FF_AUTOCENTER; empty: no force feedback
+	std::vector<uint16_t> ff;
+	uint8_t ff_effects_max;
+};
+
+struct wheel_removed
+{
+	uint8_t id;
+};
+
+struct wheel_state
+{
+	struct axis
+	{
+		uint16_t code;
+		int32_t value;
+	};
+	uint8_t id;
+	// Axes whose value changed
+	std::vector<axis> axes;
+	// Bit i (keys[i / 8] >> (i % 8)) is the state of wheel_added::keys[i]
+	std::vector<uint8_t> keys;
+};
+
 // when changing this, also make sure there are handlers in wivrn_session, etc. or compilation will fail
 using packets = std::variant<
         crypto_handshake,
@@ -751,7 +853,10 @@ using packets = std::variant<
         set_active_application,
         hid::input,
         stop_application,
-        foveation>;
+        foveation,
+        wheel_added,
+        wheel_removed,
+        wheel_state>;
 } // namespace from_headset
 
 namespace to_headset
@@ -967,6 +1072,25 @@ struct running_applications
 	std::vector<application> applications;
 };
 
+// A force-feedback request from the game for wheel id, relayed from the kernel
+struct wheel_ff
+{
+	enum class operation : uint8_t
+	{
+		upload, // effect_id, effect: store (or replace) the effect
+		erase,  // effect_id
+		play,   // effect_id, value: repeat count
+		stop,   // effect_id
+		gain,   // value: 0..0xffff
+		autocenter, // value: 0..0xffff, 0 is off
+	};
+	uint8_t id;
+	operation op;
+	int16_t effect_id;
+	int32_t value;
+	std::optional<wheel_ff_effect> effect;
+};
+
 using packets = std::variant<
         crypto_handshake,
         pin_check_2,
@@ -985,7 +1109,8 @@ using packets = std::variant<
         stream_tab_change,
         application_list,
         application_icon,
-        running_applications>;
+        running_applications,
+        wheel_ff>;
 } // namespace to_headset
 } // namespace wivrn
 
