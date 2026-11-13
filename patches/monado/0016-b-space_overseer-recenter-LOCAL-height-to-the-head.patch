@@ -1,0 +1,39 @@
+From c9653dfd46b82bc1f0ecc71ad911792f5c9153e3 Mon Sep 17 00:00:00 2001
+From: Malcolm Habeeb <malcolm@tesoroxp.com>
+Date: Thu, 12 Nov 2026 18:28:08 -0500
+Subject: [PATCH] b/space_overseer: recenter LOCAL's height to the head's
+
+recenter_local_spaces moved LOCAL to the head's yaw and x/z but kept
+its y, which WiVRn sets to a fixed 1.6 m. OpenVR layers (xrizer,
+OpenComposite) map Seated to LOCAL, so a seated game's view stayed at
+that guessed height through every system recenter, and a game with no
+reachable in-game recenter (Assetto Corsa in a headset-only session)
+could not be fixed at all. Set LOCAL's y to the head's as well;
+LOCAL_FLOOR keeps the floor height.
+---
+ src/xrt/base/b_space_overseer.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/src/xrt/base/b_space_overseer.c b/src/xrt/base/b_space_overseer.c
+index 310b74e..319ac59 100644
+--- a/src/xrt/base/b_space_overseer.c
++++ b/src/xrt/base/b_space_overseer.c
+@@ -994,8 +994,14 @@ recenter_local_spaces(struct xrt_space_overseer *xso)
+ 	local_offset.orientation = rel.pose.orientation;
+ 	local_floor_offset.orientation = rel.pose.orientation;
+ 
+-	// Keep y offset the same.
++	/*
++	 * LOCAL follows the head in height too, as a seated recenter must:
++	 * OpenVR Seated maps to LOCAL, and a fixed height leaves a seated
++	 * game's view wherever the initial guess put it. LOCAL_FLOOR keeps
++	 * its y, the floor.
++	 */
+ 	local_offset.position.x = rel.pose.position.x;
++	local_offset.position.y = rel.pose.position.y;
+ 	local_offset.position.z = rel.pose.position.z;
+ 	local_floor_offset.position.x = rel.pose.position.x;
+ 	local_floor_offset.position.z = rel.pose.position.z;
+-- 
+2.43.0
+

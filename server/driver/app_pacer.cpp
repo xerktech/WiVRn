@@ -183,6 +183,7 @@ void app_pacer::mark_delivered(int64_t frame_id, int64_t when_ns, int64_t displa
 	if (frame.frame_id != frame_id)
 		return;
 	frame.delivered = when_ns;
+	parent.frames_delivered.fetch_add(1, std::memory_order_relaxed);
 }
 
 void app_pacer::mark_discarded(int64_t frame_id, int64_t when_ns)
@@ -191,6 +192,7 @@ void app_pacer::mark_discarded(int64_t frame_id, int64_t when_ns)
 	if (frame.frame_id != frame_id)
 		return;
 	frame.delivered = when_ns;
+	parent.frames_delivered.fetch_add(1, std::memory_order_relaxed);
 }
 
 void app_pacer::info(int64_t predicted_display_time_ns,
