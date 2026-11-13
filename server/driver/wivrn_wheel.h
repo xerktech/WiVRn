@@ -49,6 +49,15 @@ struct event
 	bool operator==(const event &) const = default;
 };
 
+// A wheel the backend no longer has. refused: the backend turned it down (escalates the backoff);
+// otherwise it was dropped with the connection.
+struct lost_wheel
+{
+	uint8_t id;
+	bool refused;
+	bool operator==(const lost_wheel &) const = default;
+};
+
 // A device sink for wheels. Calls may throw: the wheel is then recreated later.
 class backend
 {
@@ -59,8 +68,9 @@ public:
 	virtual void destroy(uint8_t id) = 0;
 	// events end with a SYN_REPORT
 	virtual void send(uint8_t id, std::span<const event> events) = 0;
-	// Appends force-feedback requests and non-fatal errors since the last call
-	virtual void poll(std::vector<to_headset::wheel_ff> & ff, std::vector<std::string> & errors) = 0;
+	// Appends force-feedback requests, non-fatal errors, and wheels that no longer exist on the
+	// backend's side (to be created again), since the last call
+	virtual void poll(std::vector<to_headset::wheel_ff> & ff, std::vector<std::string> & errors, std::vector<lost_wheel> & lost) = 0;
 };
 
 // fenrir's helper over a unix SOCK_SEQPACKET socket, one JSON object per packet.
@@ -82,7 +92,9 @@ class manager
 		std::vector<int32_t> abs;       // last value, indexed by axis code
 		std::vector<bool> keys;         // last state, indexed like desc.keys
 		bool created = false;
+		std::chrono::steady_clock::time_point created_at{};
 		std::chrono::steady_clock::time_point retry_at{};
+		int failures = 0; // refusals in a row: the backoff doubles, up to 64 s
 	};
 
 	std::unique_ptr<backend> sink;
@@ -91,8 +103,13 @@ class manager
 
 	void try_create(device &);
 	void fail(device &, const std::exception &);
+	// escalate: the backend refused the wheel itself, not merely unreachable
+	void back_off(device &, bool escalate);
 
 public:
+	// A wheel that worked this long starts its backoff again at 1 s
+	std::chrono::steady_clock::duration healthy_after = std::chrono::seconds(10);
+
 	explicit manager(std::unique_ptr<backend> sink);
 	~manager();
 

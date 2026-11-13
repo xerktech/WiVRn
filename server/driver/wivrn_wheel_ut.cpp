@@ -154,9 +154,13 @@ static void test_sanitize()
 	d.axes.push_back({ABS_X, 0, 10, 0, 0});      // duplicate
 	d.axes.push_back({ABS_MT_SLOT, 0, 9, 0, 0}); // not a wheel axis
 	d.axes.push_back({ABS_RX, 5, 1, 0, 0});      // min > max
+	d.axes.push_back({ABS_RY, 7, 7, 0, 0});      // min == max: the helper refuses it
 	d.keys.push_back(KEY_A);                     // keyboard key
 	d.keys.push_back(BTN_TRIGGER);               // duplicate
 	d.keys.push_back(BTN_TRIGGER_HAPPY3);
+	d.keys.push_back(BTN_LEFT);     // mouse
+	d.keys.push_back(BTN_TOOL_PEN); // digitizer
+	d.keys.push_back(BTN_TOUCH);    // digitizer
 	d.ff.push_back(FF_CUSTOM);
 	d.ff.push_back(0x7f);
 	d.ff_effects_max = 200;
@@ -166,6 +170,7 @@ static void test_sanitize()
 	CHECK(s.axes.size() == 6);
 	CHECK(s.keys.size() == d.keys.size());
 	CHECK(s.keys[11] == 0 and s.keys[12] == 0 and s.keys[13] == BTN_TRIGGER_HAPPY3);
+	CHECK(s.keys[14] == 0 and s.keys[15] == 0 and s.keys[16] == 0);
 	CHECK(s.ff.size() == 7);
 	CHECK(s.ff_effects_max == wheel::max_ff_effects);
 
@@ -187,6 +192,7 @@ struct fake_backend : wheel::backend
 	std::vector<std::string> log;
 	std::vector<std::vector<wheel::event>> sent;
 	std::vector<to_headset::wheel_ff> pending;
+	std::vector<wheel::lost_wheel> pending_lost;
 	int fail_create = 0;
 	int fail_send = 0;
 
@@ -206,8 +212,10 @@ struct fake_backend : wheel::backend
 			throw std::runtime_error("send failed");
 		sent.emplace_back(e.begin(), e.end());
 	}
-	void poll(std::vector<to_headset::wheel_ff> & ff, std::vector<std::string> &) override
+	void poll(std::vector<to_headset::wheel_ff> & ff, std::vector<std::string> &, std::vector<wheel::lost_wheel> & lost) override
 	{
+		lost.insert(lost.end(), pending_lost.begin(), pending_lost.end());
+		pending_lost.clear();
 		ff.insert(ff.end(), pending.begin(), pending.end());
 		pending.clear();
 	}
@@ -270,9 +278,72 @@ static void test_manager()
 	CHECK(m.size() == wheel::max_wheels);
 	CHECK(m.take_errors().size() == 1);
 
+	// An unreachable backend (create throws) is retried every second, without doubling
+	m.clear();
+	CHECK(std::ranges::count(b.log, std::string("destroy 2")) == 1);
+	b.fail_create = 2;
+	m.add(g920(6));
+	std::this_thread::sleep_for(1100ms);
+	m.state({.id = 6, .axes = {{ABS_X, 1}}});
+	CHECK(b.fail_create == 0 and b.log.back() != "create 6");
+	std::this_thread::sleep_for(1100ms);
+	m.state({.id = 6, .axes = {{ABS_X, 1}}});
+	CHECK(b.log.back() == "create 6");
+	CHECK(m.take_errors().size() == 2);
+
+	// A wheel the backend refuses backs off 1 s, then 2 s
+	m.healthy_after = 500ms;
+	auto lose = [&](bool refused) {
+		b.pending_lost = {{6, refused}};
+		m.poll_ff();
+	};
+	lose(true);
+	std::this_thread::sleep_for(1100ms);
+	m.state({.id = 6, .axes = {{ABS_X, 2}}});
+	CHECK(b.log.back() == "create 6");
+	b.log.clear();
+	lose(true);
+	std::this_thread::sleep_for(1100ms);
+	m.state({.id = 6, .axes = {{ABS_X, 3}}});
+	CHECK(b.log.empty()); // 2 s not over yet
+	std::this_thread::sleep_for(1000ms);
+	m.state({.id = 6, .axes = {{ABS_X, 3}}});
+	CHECK((b.log == std::vector<std::string>{"create 6"}));
+	// After working for healthy_after, the next refusal starts at 1 s again
+	std::this_thread::sleep_for(600ms);
+	b.log.clear();
+	lose(true);
+	std::this_thread::sleep_for(1100ms);
+	m.state({.id = 6, .axes = {{ABS_X, 4}}});
+	CHECK((b.log == std::vector<std::string>{"create 6"}));
+	// After a refusal (the next one would wait 2 s), a dropped connection is retried at 1 s
+	b.log.clear();
+	lose(false);
+	std::this_thread::sleep_for(1100ms);
+	m.state({.id = 6, .axes = {{ABS_X, 6}}});
+	CHECK((b.log == std::vector<std::string>{"create 6"}));
+
+	// Repeated axes in one state give one event: the helper allows 256 per packet
+	m.clear();
+	m.add(g920(7));
+	from_headset::wheel_state flood{.id = 7};
+	for (int i = 0; i < 300; ++i)
+		flood.axes.push_back({ABS_X, i % 2 ? 100 : 200});
+	b.sent.clear();
+	m.state(flood);
+	CHECK(b.sent.size() == 1 and b.sent[0].size() == 2 and b.sent[0][0].value == 200);
+
 	m.clear();
 	CHECK(m.size() == 0);
-	CHECK(std::ranges::count(b.log, std::string("destroy 2")) == 1);
+
+	// Nothing left after sanitizing: not created at all
+	auto empty = g920(5);
+	empty.axes = {{ABS_MT_SLOT, 0, 9, 0, 0}, {ABS_X, 3, 3, 0, 0}};
+	empty.keys = {KEY_A, BTN_LEFT};
+	auto before = b.log.size();
+	m.add(empty);
+	CHECK(m.size() == 0 and b.log.size() == before);
+	CHECK(m.take_errors().size() == 1);
 }
 
 // A fake fenrir helper on a SOCK_SEQPACKET socket
@@ -380,7 +451,7 @@ static void test_helper_socket()
 	h.send(R"({"op":"ff","id":9,"kind":"gain","value":1})");                         // unknown wheel
 	h.send(R"({"op":"ff","id":1,"kind":"upload","effect":{"type":82,"id":70000}})"); // bad id
 	h.send(R"(not json)");
-	h.send(R"({"op":"error","id":1,"msg":"nope"})");
+	h.send(R"({"op":"error","id":9,"msg":"nope"})");
 	h.send(R"({"op":"ff","id":1,"kind":"upload","effect":{"type":96}})"); // FF_GAIN is no effect
 
 	auto ff = poll_until(m, 7);
@@ -402,17 +473,34 @@ static void test_helper_socket()
 	}
 	CHECK(m.take_errors().size() == 4);
 
+	// The helper refuses wheel 1 (or no longer has it): created again after the backoff
+	h.send(R"({"op":"error","id":1,"msg":"no wheel 1"})");
+	std::this_thread::sleep_for(50ms);
+	m.poll_ff();
+	CHECK(m.take_errors().size() == 1);
+	m.state({.id = 1, .axes = {{ABS_X, 5}}});
+	pollfd quiet{.fd = h.conn, .events = POLLIN};
+	CHECK(::poll(&quiet, 1, 100) == 0); // backoff: nothing sent
+	std::this_thread::sleep_for(1100ms);
+	m.state({.id = 1, .axes = {{ABS_X, 5}}});
+	CHECK(h.recv()["op"] == "create");
+	CHECK(h.recv()["events"][0]["value"] == 5);
+
 	m.remove(1);
 	auto destroy = h.recv();
 	CHECK(destroy == json({{"op", "destroy"}, {"id", 1}}));
 
-	// The helper restarts: the wheel is created again on a new connection
+	// The helper restarts: every wheel is created again on a new connection, including one
+	// that was idle meanwhile
 	m.add(g920(2));
+	m.add(g920(3));
+	CHECK(h.recv()["op"] == "create");
 	CHECK(h.recv()["op"] == "create");
 	::close(h.conn);
 	h.conn = -1;
-	m.poll_ff();
-	CHECK(not m.take_errors().empty());
+	for (int i = 0; i < 3; ++i)
+		m.poll_ff();
+	CHECK(m.take_errors().size() == 1); // reported once, not on every poll
 	m.state({.id = 2, .axes = {{ABS_X, 1}}});
 	std::this_thread::sleep_for(1100ms);
 	m.state({.id = 2, .axes = {{ABS_X, 2}}});
@@ -421,6 +509,10 @@ static void test_helper_socket()
 	CHECK(again["op"] == "create" and again["id"] == 2);
 	auto ev2 = h.recv();
 	CHECK(ev2["op"] == "events" and ev2["events"][0]["value"] == 2);
+	m.state({.id = 3, .axes = {{ABS_X, 7}}});
+	auto again3 = h.recv();
+	CHECK(again3["op"] == "create" and again3["id"] == 3);
+	CHECK(h.recv()["events"][0]["value"] == 7);
 }
 
 static std::string event_node(const std::string & sysname)
