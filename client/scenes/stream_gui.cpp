@@ -31,6 +31,7 @@
 #include "render/ui_widgets.h"
 #include "utils/i18n.h"
 #include "utils/ranges.h"
+#include "wheel/wheel.h"
 #include <IconsFontAwesome7.h>
 #include <chrono>
 #include <cmath>
@@ -921,6 +922,12 @@ void scenes::stream::draw_gui(XrTime predicted_display_time, XrDuration predicte
 		if (auto bat = wivrn::gui::battery_status_indicator(instance.now()))
 			top_items.push_back({wivrn::ui::chip_width(bat->label, false, side),
 			                     [bat = *bat, side] { wivrn::ui::chip(bat.label, bat.style, false, side); }});
+		if (not wheel::manager::instance().connected().empty())
+		{
+			const std::string wheel_label = _C("status in the title bar", "Wheel connected");
+			top_items.push_back({wivrn::ui::chip_width(wheel_label, false, side),
+			                     [wheel_label, side] { wivrn::ui::chip(wheel_label, wivrn::ui::chip_style::success, false, side); }});
+		}
 		const std::string conn = _C("status in the title bar", "Connected");
 		top_items.push_back({wivrn::ui::chip_width(conn, true, side),
 		                     [conn, side] { wivrn::ui::chip(conn, wivrn::ui::chip_style::success, true, side); }});

@@ -412,6 +412,8 @@ const std::vector<config_field> & configuration::config_fields()
 	        scalar("forward_mouse", &configuration::forward_mouse),
 	        scalar("forward_gamepad", &configuration::forward_gamepad),
 	        scalar("emulated_gamepad", &configuration::emulated_gamepad),
+	        scalar("forward_wheel", &configuration::forward_wheel),
+	        scalar("log_wheel_ff", &configuration::log_wheel_ff),
 	        scalar("virtual_keyboard_layout", &configuration::virtual_keyboard_layout),
 	        scalar("override_foveation_enable", &configuration::override_foveation_enable),
 	        scalar("override_foveation_pitch", &configuration::override_foveation_pitch),

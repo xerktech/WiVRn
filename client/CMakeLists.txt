@@ -166,6 +166,7 @@ file(GLOB LOCAL_SOURCE CONFIGURE_DEPENDS
     "utils/*.cpp"
     "vk/*.cpp"
     "xr/*.cpp"
+    "wheel/*.cpp"
     "render/*.cpp"
 )
 

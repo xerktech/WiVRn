@@ -22,6 +22,7 @@
 #include "application.h"
 #include "utils/i18n.h"
 #include "utils/named_thread.h"
+#include "wheel/wheel.h"
 
 #include <spdlog/spdlog.h>
 #include <uni_algo/case.h>
@@ -162,6 +163,11 @@ void scenes::stream::operator()(to_headset::application_list && l)
 void scenes::stream::operator()(to_headset::application_icon && icon)
 {
 	apps(std::move(icon));
+}
+
+void scenes::stream::operator()(to_headset::wheel_ff && ff)
+{
+	wheel::manager::instance().ff(ff);
 }
 
 void scenes::stream::operator()(to_headset::running_applications && apps)
