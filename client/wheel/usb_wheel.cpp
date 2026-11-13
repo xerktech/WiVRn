@@ -344,7 +344,7 @@ void usb_wheel::ff(const wivrn::to_headset::wheel_ff & request)
 		case op::upload:
 			if (not request.effect)
 				return;
-			// Bounded by the effects the server may have (64); ids beyond that are junk
+			// At most the effects the wheel advertised (one slot stays for autocenter)
 			if (not known_effects.contains(request.effect_id) and known_effects.size() >= ff_effects_max)
 			{
 				if (dropped_ff++ % 1000 == 0)
@@ -404,12 +404,14 @@ void usb_wheel::ff_loop()
 			autocenter = std::exchange(pending_autocenter, std::nullopt);
 		}
 
+		// Erases first, for every effect: an erase came before anything still pending for
+		// its id, and frees the slot a new effect in this batch may need
 		for (auto & [effect_id, p]: effects)
-		{
-			// Erase first (it came before anything else still pending for this id), then
-			// the latest definition, then the latest play/stop
 			if (p.erase)
 				apply({.id = id, .op = op::erase, .effect_id = effect_id});
+		// Then each effect's latest definition, then its latest play/stop
+		for (auto & [effect_id, p]: effects)
+		{
 			if (p.upload)
 				apply({.id = id, .op = op::upload, .effect_id = effect_id, .effect = std::move(p.upload)});
 			if (p.play)
