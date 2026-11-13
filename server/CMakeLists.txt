@@ -137,6 +137,7 @@ if (WIVRN_BUILD_SERVER)
 			driver/wivrn_htc_face_tracker.cpp
 			driver/wivrn_generic_tracker.cpp
 			driver/wivrn_uinput.cpp
+			driver/wivrn_wheel.cpp
 			driver/wivrn_session.cpp
 			driver/authenticate.cpp
 			driver/wivrn_connection.cpp

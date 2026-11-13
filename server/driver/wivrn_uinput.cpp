@@ -382,3 +382,133 @@ void wivrn_uinput::init_gamepad()
 	write_or_throw(fd, &uidev, sizeof(uidev));
 	ioctl_or_throw(fd, UI_DEV_CREATE);
 }
+
+void wivrn_uinput_wheels::create(const wivrn::from_headset::wheel_added & desc)
+{
+	destroy(desc.id);
+
+	// O_RDWR to read force-feedback requests back from the device
+	auto dev = open_uinput_or_throw(O_RDWR);
+	int fd = dev.get_fd();
+
+	bool has_keys = std::ranges::any_of(desc.keys, [](uint16_t k) { return k != 0; });
+	if (has_keys)
+		ioctl_or_throw(fd, UI_SET_EVBIT, EV_KEY);
+	for (auto k: desc.keys)
+		if (k)
+			ioctl_or_throw(fd, UI_SET_KEYBIT, k);
+	if (not desc.axes.empty())
+		ioctl_or_throw(fd, UI_SET_EVBIT, EV_ABS);
+	for (const auto & a: desc.axes)
+		ioctl_or_throw(fd, UI_SET_ABSBIT, a.code);
+	if (not desc.ff.empty())
+		ioctl_or_throw(fd, UI_SET_EVBIT, EV_FF);
+	for (auto f: desc.ff)
+		ioctl_or_throw(fd, UI_SET_FFBIT, f);
+
+	uinput_setup setup{
+	        .id = {
+	                .bustype = BUS_USB,
+	                .vendor = desc.vendor,
+	                .product = desc.product,
+	                .version = desc.version,
+	        },
+	        .ff_effects_max = desc.ff_effects_max,
+	};
+	std::snprintf(setup.name, sizeof(setup.name), "%s", desc.name.c_str());
+	if (ioctl(fd, UI_DEV_SETUP, &setup) < 0)
+		throw std::system_error(errno, std::generic_category(), "UI_DEV_SETUP");
+
+	for (const auto & a: desc.axes)
+	{
+		uinput_abs_setup abs{
+		        .code = a.code,
+		        .absinfo = {
+		                .value = a.min,
+		                .minimum = a.min,
+		                .maximum = a.max,
+		                .fuzz = a.fuzz,
+		                .flat = a.flat,
+		        },
+		};
+		if (ioctl(fd, UI_ABS_SETUP, &abs) < 0)
+			throw std::system_error(errno, std::generic_category(), "UI_ABS_SETUP");
+	}
+	ioctl_or_throw(fd, UI_DEV_CREATE);
+	devices.emplace(desc.id, std::move(dev));
+}
+
+void wivrn_uinput_wheels::destroy(uint8_t id)
+{
+	auto it = devices.find(id);
+	if (it == devices.end())
+		return;
+	ioctl(it->second.get_fd(), UI_DEV_DESTROY);
+	devices.erase(it);
+}
+
+void wivrn_uinput_wheels::send(uint8_t id, std::span<const wivrn::wheel::event> events)
+{
+	auto it = devices.find(id);
+	if (it == devices.end())
+		throw std::runtime_error("no such wheel");
+	for (const auto & e: events)
+		emit_ev(it->second.get_fd(), e.type, e.code, e.value);
+}
+
+void wivrn_uinput_wheels::poll(std::vector<wivrn::to_headset::wheel_ff> & ff, std::vector<std::string> & errors, std::vector<wivrn::wheel::lost_wheel> &)
+{
+	using op = wivrn::to_headset::wheel_ff::operation;
+	for (auto & [id, dev]: devices)
+	{
+		int fd = dev.get_fd();
+		input_event ev;
+		while (::read(fd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev))
+		{
+			if (ev.type == EV_UINPUT and ev.code == UI_FF_UPLOAD)
+			{
+				uinput_ff_upload upload{.request_id = (uint32_t)ev.value};
+				if (ioctl(fd, UI_BEGIN_FF_UPLOAD, &upload) < 0)
+				{
+					errors.push_back(std::string("UI_BEGIN_FF_UPLOAD: ") + strerror(errno));
+					continue;
+				}
+				auto effect = wivrn::wheel::from_kernel(upload.effect);
+				upload.retval = effect ? 0 : -EINVAL;
+				if (effect)
+					ff.push_back({.id = id, .op = op::upload, .effect_id = upload.effect.id, .effect = std::move(effect)});
+				ioctl(fd, UI_END_FF_UPLOAD, &upload);
+			}
+			else if (ev.type == EV_UINPUT and ev.code == UI_FF_ERASE)
+			{
+				uinput_ff_erase erase{.request_id = (uint32_t)ev.value};
+				if (ioctl(fd, UI_BEGIN_FF_ERASE, &erase) < 0)
+				{
+					errors.push_back(std::string("UI_BEGIN_FF_ERASE: ") + strerror(errno));
+					continue;
+				}
+				ff.push_back({.id = id, .op = op::erase, .effect_id = (int16_t)erase.effect_id});
+				erase.retval = 0;
+				ioctl(fd, UI_END_FF_ERASE, &erase);
+			}
+			else if (ev.type == EV_FF and ev.code == FF_GAIN)
+				ff.push_back({.id = id, .op = op::gain, .value = std::clamp(ev.value, 0, 0xffff)});
+			else if (ev.type == EV_FF and ev.code == FF_AUTOCENTER)
+				ff.push_back({.id = id, .op = op::autocenter, .value = std::clamp(ev.value, 0, 0xffff)});
+			else if (ev.type == EV_FF)
+				// ev.code is the effect id, ev.value the repeat count, 0 stops it
+				ff.push_back({.id = id, .op = ev.value ? op::play : op::stop, .effect_id = (int16_t)ev.code, .value = ev.value});
+		}
+	}
+}
+
+std::string wivrn_uinput_wheels::sysname(uint8_t id) const
+{
+	auto it = devices.find(id);
+	if (it == devices.end())
+		return {};
+	char name[64]{};
+	if (ioctl(it->second.get_fd(), UI_GET_SYSNAME(sizeof(name) - 1), name) < 0)
+		return {};
+	return name;
+}

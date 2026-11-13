@@ -285,6 +285,16 @@ wivrn::wivrn_session::wivrn_session(std::unique_ptr<wivrn_connection> connection
 			});
 		}
 	}
+
+	// Wheels plugged into the headset: fenrir's helper owns uinput in its VR pods, which have
+	// no /dev/uinput. Without it, local uinput is used only where input forwarding is allowed.
+	if (const char * path = std::getenv("DIREWOLF_WHEEL_SOCKET"); path and *path)
+	{
+		U_LOG_I("Wheels are created through %s", path);
+		wheels.emplace(wivrn::wheel::make_helper_backend(path));
+	}
+	else if (conf.hid_forwarding)
+		wheels.emplace(std::make_unique<wivrn_uinput_wheels>());
 }
 
 wivrn_session::~wivrn_session()
@@ -419,6 +429,10 @@ void wivrn_session::pause_session()
 
 	worker_thread = std::jthread();
 	offset_est.reset();
+
+	// The headset sends wheel_added again when it reconnects
+	if (wheels)
+		wheels->clear();
 
 	if (audio_handle)
 		audio_handle->pause();
@@ -793,6 +807,41 @@ void wivrn_session::operator()(from_headset::hid::input && e)
 	}
 }
 
+void wivrn_session::operator()(from_headset::wheel_added && wheel)
+{
+	if (not wheels)
+	{
+		U_LOG_W("Wheel %s ignored: set DIREWOLF_WHEEL_SOCKET or enable hid-forwarding", wheel.name.c_str());
+		return;
+	}
+	U_LOG_I("Wheel %d added: %04x:%04x %s", wheel.id, wheel.vendor, wheel.product, wheel.name.c_str());
+	wheels->add(std::move(wheel));
+	log_wheel_errors();
+}
+
+void wivrn_session::operator()(const from_headset::wheel_removed & wheel)
+{
+	if (not wheels)
+		return;
+	U_LOG_I("Wheel %d removed", wheel.id);
+	wheels->remove(wheel.id);
+	log_wheel_errors();
+}
+
+void wivrn_session::operator()(const from_headset::wheel_state & state)
+{
+	if (not wheels)
+		return;
+	wheels->state(state);
+	log_wheel_errors();
+}
+
+void wivrn_session::log_wheel_errors()
+{
+	for (const auto & e: wheels->take_errors())
+		U_LOG_W("Wheel error: %s", e.c_str());
+}
+
 void wivrn_session::operator()(from_headset::timesync_response && timesync)
 {
 	offset_est.add_sample(timesync);
@@ -1076,6 +1125,14 @@ void wivrn_session::run_net(std::stop_token stop)
 			{
 				for (auto & haptics: uinput_handler->read_rumble())
 					send_stream(std::move(haptics));
+			}
+
+			if (wheels)
+			{
+				// Effect uploads must not be lost: control channel
+				for (auto & ff: wheels->poll_ff())
+					send_control(std::move(ff));
+				log_wheel_errors();
 			}
 
 			if (auto locked = net_exception.lock(); *locked)

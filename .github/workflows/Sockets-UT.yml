@@ -67,3 +67,16 @@ jobs:
           -pthread -lsimdjson -lcurl -lssl -lcrypto -o qr_ut
     - name: Run qr_ut
       run: ./qr_ut
+    # Wheels (XERK-2850): packet serialization, the fenrir helper socket against a fake helper,
+    # and a real uinput wheel with a force-feedback upload round trip (root + uinput module)
+    - name: Build wivrn_wheel_ut (ASan/UBSan)
+      run: |
+        sudo apt-get install -y nlohmann-json3-dev
+        g++ -std=c++23 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+          -Icommon -Iserver -Iserver/driver -Iinclude \
+          server/driver/wivrn_wheel_ut.cpp server/driver/wivrn_wheel.cpp server/driver/wivrn_uinput.cpp \
+          common/wivrn_sockets.cpp common/crypto.cpp common/smp.cpp -lssl -lcrypto -o wivrn_wheel_ut
+    - name: Run wivrn_wheel_ut
+      run: |
+        sudo modprobe uinput
+        sudo WIVRN_REQUIRE_UINPUT=1 ./wivrn_wheel_ut

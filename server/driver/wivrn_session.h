@@ -38,6 +38,7 @@
 #include "wivrn_ipc.h"
 #include "wivrn_packets.h"
 #include "wivrn_uinput.h"
+#include "wivrn_wheel.h"
 #include "xrt/xrt_results.h"
 #include "xrt/xrt_system.h"
 #include <map>
@@ -106,7 +107,8 @@ class wivrn_session : public xrt_system_devices
 	std::optional<wivrn_body_tracker> body_tracker;
 	beman::inplace_vector::inplace_vector<wivrn_generic_tracker, from_headset::htc_body::max_tracked_poses> generic_trackers;
 	std::optional<wivrn_uinput> uinput_handler;
-	bool gamepad_connected = false; // network thread only
+	std::optional<wivrn::wheel::manager> wheels; // network thread only
+	bool gamepad_connected = false;              // network thread only
 
 	clock_offset_estimator offset_est;
 	std::atomic<XrDuration> tracking_latency; // production to reception time
@@ -190,6 +192,10 @@ public:
 	void operator()(const from_headset::get_running_applications &);
 	void operator()(const from_headset::set_active_application &);
 	void operator()(const from_headset::stop_application &);
+	void operator()(from_headset::wheel_added &&);
+	void operator()(const from_headset::wheel_removed &);
+	void operator()(const from_headset::wheel_state &);
+	void log_wheel_errors();
 	void operator()(audio_data &&);
 
 	void operator()(to_monado::stop &&);

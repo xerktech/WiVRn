@@ -1,8 +1,10 @@
 #include "wivrn_packets.h"
 #include "wivrn_sockets.h"
+#include "wivrn_wheel.h"
 
 #include <cstdint>
 #include <map>
+#include <string>
 #include <vector>
 
 #include <linux/uinput.h>
@@ -40,4 +42,20 @@ private:
 	wivrn::fd_base mouse_fd;
 	wivrn::fd_base gamepad_fd;
 	std::map<int16_t, ff_effect> ff_effects;
+};
+
+// Wheels as local uinput devices (XERK-2850), used when no fenrir wheel helper is configured.
+// Force-feedback uploads are acknowledged at once and relayed to the headset.
+class wivrn_uinput_wheels : public wivrn::wheel::backend
+{
+	std::map<uint8_t, wivrn::fd_base> devices;
+
+public:
+	void create(const wivrn::from_headset::wheel_added & desc) override;
+	void destroy(uint8_t id) override;
+	void send(uint8_t id, std::span<const wivrn::wheel::event> events) override;
+	void poll(std::vector<wivrn::to_headset::wheel_ff> & ff, std::vector<std::string> & errors, std::vector<wivrn::wheel::lost_wheel> & lost) override;
+
+	// "inputN", the device's directory in /sys/devices/virtual/input
+	std::string sysname(uint8_t id) const;
 };
