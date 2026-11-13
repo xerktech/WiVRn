@@ -451,7 +451,7 @@ struct serialize_bits<T, std::tuple<std::integer_sequence<size_t, i, mid...>, Bi
 } // namespace details
 
 template <typename T>
-struct serialization_traits<T, std::enable_if_t<std::is_arithmetic_v<T>>>
+struct serialization_traits<T, std::enable_if_t<std::is_arithmetic_v<T> and not std::is_same_v<T, bool>>>
 {
 	static constexpr void type_hash(details::hash_context & h)
 	{
@@ -491,6 +491,46 @@ struct serialization_traits<T, std::enable_if_t<std::is_arithmetic_v<T>>>
 	}
 };
 
+// bool and enums are read through their underlying integer and range-checked: loading a byte
+// that is not a valid value straight into the field is undefined behaviour (UBSan aborts on it).
+// They are therefore not trivially serializable, so struct fast paths never memcpy into them.
+template <>
+struct serialization_traits<bool>
+{
+	static constexpr void type_hash(details::hash_context & h)
+	{
+		// Same hash as before bool had its own specialization, keeps the protocol hash unchanged
+		h.feed("uint");
+		h.feed(sizeof(bool) * 8);
+	}
+
+	static void serialize(bool value, serialization_packet & packet)
+	{
+		uint8_t raw = value ? 1 : 0;
+		static_assert(sizeof(raw) == sizeof(bool));
+		packet.write(&raw, sizeof(raw));
+	}
+
+	static bool deserialize(deserialization_packet & packet)
+	{
+		uint8_t raw;
+		packet.read(&raw, sizeof(raw));
+		if (raw > 1)
+			throw deserialization_error(packet.initial_buffer);
+		return raw == 1;
+	}
+
+	static bool consteval is_trivially_serializable()
+	{
+		return false;
+	}
+
+	static size_t size(const bool &)
+	{
+		return sizeof(bool);
+	}
+};
+
 template <typename T>
 struct serialization_traits<T, std::enable_if_t<std::is_enum_v<T>>>
 {
@@ -521,13 +561,18 @@ struct serialization_traits<T, std::enable_if_t<std::is_enum_v<T>>>
 
 	static T deserialize(deserialization_packet & packet)
 	{
-		T value;
-		packet.read((char *)&value, sizeof(value));
-		return value;
+		// magic_enum only sees values in its reflection range; an enum it cannot reflect would
+		// reject every value, so fail the build instead.
+		static_assert(magic_enum::enum_count<T>() > 0, "enum not reflectable by magic_enum");
+		std::underlying_type_t<T> raw;
+		packet.read(&raw, sizeof(raw));
+		if (not magic_enum::enum_contains<T>(raw))
+			throw deserialization_error(packet.initial_buffer);
+		return static_cast<T>(raw);
 	}
 	static bool consteval is_trivially_serializable()
 	{
-		return true;
+		return false;
 	}
 
 	static size_t size(const T &)
