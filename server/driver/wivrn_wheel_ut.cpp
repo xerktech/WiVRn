@@ -486,6 +486,19 @@ static void test_helper_socket()
 	CHECK(h.recv()["op"] == "create");
 	CHECK(h.recv()["events"][0]["value"] == 5);
 
+	// Refused again right away: the helper's error counts as a refusal, so this wait is 2 s
+	h.send(R"({"op":"error","id":1,"msg":"refused"})");
+	std::this_thread::sleep_for(50ms);
+	m.poll_ff();
+	std::this_thread::sleep_for(1100ms);
+	m.state({.id = 1, .axes = {{ABS_X, 6}}});
+	CHECK(::poll(&quiet, 1, 100) == 0); // 2 s not over yet
+	std::this_thread::sleep_for(1000ms);
+	m.state({.id = 1, .axes = {{ABS_X, 6}}});
+	CHECK(h.recv()["op"] == "create");
+	CHECK(h.recv()["events"][0]["value"] == 6);
+	m.take_errors();
+
 	m.remove(1);
 	auto destroy = h.recv();
 	CHECK(destroy == json({{"op", "destroy"}, {"id", 1}}));
@@ -513,6 +526,17 @@ static void test_helper_socket()
 	auto again3 = h.recv();
 	CHECK(again3["op"] == "create" and again3["id"] == 3);
 	CHECK(h.recv()["events"][0]["value"] == 7);
+
+	// A second restart: a dropped connection is no refusal, so the wait stays 1 s (a refusal
+	// counted for the first drop would make it 2 s now)
+	::close(h.conn);
+	h.conn = -1;
+	m.poll_ff();
+	std::this_thread::sleep_for(1100ms);
+	m.state({.id = 2, .axes = {{ABS_X, 3}}});
+	CHECK(h.accept());
+	auto third = h.recv();
+	CHECK(third["op"] == "create" and third["id"] == 2);
 }
 
 static std::string event_node(const std::string & sysname)
