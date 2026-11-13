@@ -192,6 +192,7 @@ struct fake_backend : wheel::backend
 	std::vector<std::string> log;
 	std::vector<std::vector<wheel::event>> sent;
 	std::vector<to_headset::wheel_ff> pending;
+	std::vector<wheel::lost_wheel> pending_lost;
 	int fail_create = 0;
 	int fail_send = 0;
 
@@ -211,8 +212,10 @@ struct fake_backend : wheel::backend
 			throw std::runtime_error("send failed");
 		sent.emplace_back(e.begin(), e.end());
 	}
-	void poll(std::vector<to_headset::wheel_ff> & ff, std::vector<std::string> &, std::vector<uint8_t> &) override
+	void poll(std::vector<to_headset::wheel_ff> & ff, std::vector<std::string> &, std::vector<wheel::lost_wheel> & lost) override
 	{
+		lost.insert(lost.end(), pending_lost.begin(), pending_lost.end());
+		pending_lost.clear();
 		ff.insert(ff.end(), pending.begin(), pending.end());
 		pending.clear();
 	}
@@ -275,8 +278,9 @@ static void test_manager()
 	CHECK(m.size() == wheel::max_wheels);
 	CHECK(m.take_errors().size() == 1);
 
-	// A create that keeps failing backs off: 1 s, then 2 s
+	// An unreachable backend (create throws) is retried every second, without doubling
 	m.clear();
+	CHECK(std::ranges::count(b.log, std::string("destroy 2")) == 1);
 	b.fail_create = 2;
 	m.add(g920(6));
 	std::this_thread::sleep_for(1100ms);
@@ -284,11 +288,50 @@ static void test_manager()
 	CHECK(b.fail_create == 0 and b.log.back() != "create 6");
 	std::this_thread::sleep_for(1100ms);
 	m.state({.id = 6, .axes = {{ABS_X, 1}}});
-	CHECK(b.log.back() != "create 6"); // 2 s not over yet
-	std::this_thread::sleep_for(1000ms);
-	m.state({.id = 6, .axes = {{ABS_X, 1}}});
 	CHECK(b.log.back() == "create 6");
 	CHECK(m.take_errors().size() == 2);
+
+	// A wheel the backend refuses backs off 1 s, then 2 s
+	m.healthy_after = 500ms;
+	auto lose = [&](bool refused) {
+		b.pending_lost = {{6, refused}};
+		m.poll_ff();
+	};
+	lose(true);
+	std::this_thread::sleep_for(1100ms);
+	m.state({.id = 6, .axes = {{ABS_X, 2}}});
+	CHECK(b.log.back() == "create 6");
+	b.log.clear();
+	lose(true);
+	std::this_thread::sleep_for(1100ms);
+	m.state({.id = 6, .axes = {{ABS_X, 3}}});
+	CHECK(b.log.empty()); // 2 s not over yet
+	std::this_thread::sleep_for(1000ms);
+	m.state({.id = 6, .axes = {{ABS_X, 3}}});
+	CHECK((b.log == std::vector<std::string>{"create 6"}));
+	// After working for healthy_after, the next refusal starts at 1 s again
+	std::this_thread::sleep_for(600ms);
+	b.log.clear();
+	lose(true);
+	std::this_thread::sleep_for(1100ms);
+	m.state({.id = 6, .axes = {{ABS_X, 4}}});
+	CHECK((b.log == std::vector<std::string>{"create 6"}));
+	// After a refusal (the next one would wait 2 s), a dropped connection is retried at 1 s
+	b.log.clear();
+	lose(false);
+	std::this_thread::sleep_for(1100ms);
+	m.state({.id = 6, .axes = {{ABS_X, 6}}});
+	CHECK((b.log == std::vector<std::string>{"create 6"}));
+
+	// Repeated axes in one state give one event: the helper allows 256 per packet
+	m.clear();
+	m.add(g920(7));
+	from_headset::wheel_state flood{.id = 7};
+	for (int i = 0; i < 300; ++i)
+		flood.axes.push_back({ABS_X, i % 2 ? 100 : 200});
+	b.sent.clear();
+	m.state(flood);
+	CHECK(b.sent.size() == 1 and b.sent[0].size() == 2 and b.sent[0][0].value == 200);
 
 	m.clear();
 	CHECK(m.size() == 0);
@@ -301,7 +344,6 @@ static void test_manager()
 	m.add(empty);
 	CHECK(m.size() == 0 and b.log.size() == before);
 	CHECK(m.take_errors().size() == 1);
-	CHECK(std::ranges::count(b.log, std::string("destroy 2")) == 1);
 }
 
 // A fake fenrir helper on a SOCK_SEQPACKET socket

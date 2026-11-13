@@ -18,6 +18,7 @@
 #include "wivrn_wheel.h"
 
 #include <algorithm>
+#include <bitset>
 #include <cerrno>
 #include <cstring>
 #include <stdexcept>
@@ -177,7 +178,7 @@ class helper_backend : public backend
 	std::vector<char> buf = std::vector<char>(65536);
 	// Wheels created on this connection, and those lost since the last poll
 	std::set<uint8_t> live;
-	std::vector<uint8_t> lost;
+	std::vector<lost_wheel> lost;
 
 	void disconnect()
 	{
@@ -185,7 +186,8 @@ class helper_backend : public backend
 			::close(fd);
 		fd = -1;
 		// The helper destroys a closed connection's wheels
-		lost.insert(lost.end(), live.begin(), live.end());
+		for (auto id: live)
+			lost.push_back({id, false});
 		live.clear();
 	}
 
@@ -238,7 +240,7 @@ class helper_backend : public backend
 			if (auto id = j.find("id"); id != j.end() and id->is_number_unsigned() and id->get<uint64_t>() <= 255)
 			{
 				if (live.erase(id->get<uint8_t>()))
-					lost.push_back(id->get<uint8_t>());
+					lost.push_back({id->get<uint8_t>(), true});
 			}
 			return;
 		}
@@ -310,13 +312,13 @@ public:
 		        {"ff_effects_max", desc.ff_effects_max},
 		});
 		live.insert(desc.id);
-		std::erase(lost, desc.id);
+		std::erase_if(lost, [&](const auto & l) { return l.id == desc.id; });
 	}
 
 	void destroy(uint8_t id) override
 	{
 		live.erase(id);
-		std::erase(lost, id);
+		std::erase_if(lost, [&](const auto & l) { return l.id == id; });
 		if (fd >= 0)
 			send_json({{"op", "destroy"}, {"id", id}});
 	}
@@ -329,7 +331,7 @@ public:
 		send_json({{"op", "events"}, {"id", id}, {"events", std::move(e)}});
 	}
 
-	void poll(std::vector<to_headset::wheel_ff> & ff, std::vector<std::string> & errors, std::vector<uint8_t> & lost_ids) override
+	void poll(std::vector<to_headset::wheel_ff> & ff, std::vector<std::string> & errors, std::vector<lost_wheel> & lost_ids) override
 	{
 		poll_socket(ff, errors);
 		lost_ids.insert(lost_ids.end(), lost.begin(), lost.end());
@@ -506,19 +508,25 @@ void manager::fail(device & d, const std::exception & e)
 		catch (...)
 		{}
 	}
-	back_off(d);
+	// Connect and send errors: the helper is down or restarting, retry soon
+	back_off(d, false);
 }
 
-void manager::back_off(device & d)
+void manager::back_off(device & d, bool escalate)
 {
-	// A create the helper refuses for its content is refused every time: don't retry it every
+	// A wheel the helper refuses for its content is refused every time: don't retry it every
 	// second forever. A wheel that worked for a while starts again at 1 s.
 	auto now = std::chrono::steady_clock::now();
-	if (d.created and now - d.created_at > std::chrono::seconds(10))
+	if (d.created and now - d.created_at > healthy_after)
 		d.failures = 0;
 	d.created = false;
-	d.retry_at = now + std::min<std::chrono::seconds>(std::chrono::seconds(1 << d.failures), std::chrono::seconds(60));
-	d.failures = std::min(d.failures + 1, 6);
+	if (escalate)
+	{
+		d.retry_at = now + std::chrono::seconds(1 << d.failures); // 1 s .. 64 s
+		d.failures = std::min(d.failures + 1, 6);
+	}
+	else
+		d.retry_at = now + std::chrono::seconds(1);
 }
 
 void manager::try_create(device & d)
@@ -601,12 +609,16 @@ void manager::state(const from_headset::wheel_state & state)
 			return;
 	}
 
+	// At most one event per axis and key, so a packet stays under the helper's 256 events
+	// (≤ 41 axes + ≤ 122 distinct keys + SYN)
 	std::vector<event> events;
+	std::bitset<max_abs + 1> seen;
 	for (const auto & v: state.axes)
 	{
 		auto a = std::ranges::find_if(d.desc.axes, [&](const auto & a) { return a.code == v.code; });
-		if (a == d.desc.axes.end())
+		if (a == d.desc.axes.end() or seen[v.code])
 			continue;
+		seen[v.code] = true;
 		auto value = std::clamp(v.value, a->min, a->max);
 		if (d.abs[v.code] == value)
 			continue;
@@ -640,7 +652,7 @@ void manager::state(const from_headset::wheel_state & state)
 std::vector<to_headset::wheel_ff> manager::poll_ff()
 {
 	std::vector<to_headset::wheel_ff> ff;
-	std::vector<uint8_t> lost;
+	std::vector<lost_wheel> lost;
 	try
 	{
 		sink->poll(ff, errors, lost);
@@ -650,10 +662,10 @@ std::vector<to_headset::wheel_ff> manager::poll_ff()
 		errors.push_back(e.what());
 	}
 	// Recreated on their next state, after the usual backoff
-	for (auto id: lost)
+	for (auto [id, refused]: lost)
 	{
 		if (auto it = devices.find(id); it != devices.end() and it->second.created)
-			back_off(it->second);
+			back_off(it->second, refused);
 	}
 	std::erase_if(ff, [&](const auto & f) {
 		auto it = devices.find(f.id);
