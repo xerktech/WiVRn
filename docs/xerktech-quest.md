@@ -12,6 +12,8 @@ APK, built from the same commit as the server.
   commit in the same change. A mismatch fails at handshake.
 - Releases are tagged `apk-<full commit sha>` on
   <https://github.com/xerktech/WiVRn/releases>.
+- Each release and its APK are named `wivrn-quest-MAJOR.MINOR.PATCH`: MAJOR.MINOR is the
+  upstream release (`vMAJOR.MINOR` tag) and PATCH the number of commits since that tag.
 
 ## Publishing an APK
 
@@ -52,7 +54,7 @@ The alias must be `default_key` (see `signingConfigs` in `build.gradle`).
    ```bash
    SHA=<commit the server is built from>
    gh release download "apk-$SHA" -R xerktech/WiVRn -p '*.apk'
-   adb install -r "wivrn-xerktech-$SHA.apk"
+   adb install -r wivrn-quest-*.apk
    ```
 
 5. Launch it from Library → Applications → Unknown Sources → "WiVRn XerkTech".
