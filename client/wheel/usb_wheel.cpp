@@ -35,10 +35,8 @@ namespace
 {
 constexpr unsigned transfer_timeout_ms = 100;
 constexpr auto reply_timeout = std::chrono::milliseconds(250);
-// Uploads and plays are dropped once this many requests wait for a slow wheel
-constexpr size_t ff_queue_max = 64;
-// Stops and erases still get in (so a force can't stay stuck on), up to this hard limit
-constexpr size_t ff_queue_hard_max = 256;
+// Effects the server may define at once (it caps ff_effects_max at 64)
+constexpr size_t max_known_effects = 64;
 
 std::vector<uint8_t> read_descriptors(int fd)
 {
@@ -335,48 +333,81 @@ void usb_wheel::ff(const wivrn::to_headset::wheel_ff & request)
 	using op = wivrn::to_headset::wheel_ff::operation;
 	std::lock_guard lock(ff_mutex);
 
-	// Gain and autocenter: only the latest value matters
-	if (request.op == op::gain or request.op == op::autocenter)
-		std::erase_if(ff_queue, [&](const auto & r) { return r.op == request.op; });
-
-	// The last queued request for the same effect
-	auto last = std::find_if(ff_queue.rbegin(), ff_queue.rend(), [&](const auto & r) {
-		return r.op != op::gain and r.op != op::autocenter and r.effect_id == request.effect_id;
-	});
-	bool has_last = (request.op != op::gain and request.op != op::autocenter) and last != ff_queue.rend();
-
-	if (has_last and last->op == request.op and (request.op == op::upload or request.op == op::stop or request.op == op::erase))
+	// Requests are folded into what the wheel should end up with, not queued: a game
+	// sending faster than the wheel answers then costs nothing, and a stop is never lost.
+	switch (request.op)
 	{
-		// A game updating a force faster than the wheel takes it only needs the latest
-		// version; a second stop or erase changes nothing
-		*last = request;
-		return;
+		case op::gain:
+			pending_gain = request.value;
+			break;
+		case op::autocenter:
+			pending_autocenter = request.value;
+			break;
+		case op::upload:
+			if (not request.effect)
+				return;
+			// Bounded by the effects the server may have (64); ids beyond that are junk
+			if (not known_effects.contains(request.effect_id) and known_effects.size() >= max_known_effects)
+			{
+				if (dropped_ff++ % 1000 == 0)
+					spdlog::warn("wheel {}: too many force feedback effects, dropping upload ({} dropped)", id, dropped_ff);
+				return;
+			}
+			known_effects.insert(request.effect_id);
+			pending[request.effect_id].upload = request.effect;
+			break;
+		case op::play:
+		case op::stop:
+			// An effect never uploaded has nothing to play or stop
+			if (not known_effects.contains(request.effect_id))
+				return;
+			pending[request.effect_id].play = request.op == op::play ? std::optional(request.value) : std::optional(0);
+			break;
+		case op::erase:
+			if (not known_effects.contains(request.effect_id))
+				return;
+			known_effects.erase(request.effect_id);
+			// Whatever was pending for the old effect no longer matters
+			pending[request.effect_id] = {.erase = true};
+			break;
 	}
-
-	bool control = request.op != op::upload and request.op != op::play;
-	if (ff_queue.size() >= (control ? ff_queue_hard_max : ff_queue_max))
-	{
-		spdlog::warn("wheel {}: force feedback queue full, dropping request", id);
-		return;
-	}
-	ff_queue.push_back(request);
 	ff_cv.notify_one();
 }
 
 void usb_wheel::ff_loop()
 {
+	using wivrn::to_headset::wheel_ff;
+	using op = wheel_ff::operation;
 	while (true)
 	{
-		wivrn::to_headset::wheel_ff request;
+		std::map<int16_t, pending_effect> effects;
+		std::optional<int32_t> gain;
+		std::optional<int32_t> autocenter;
 		{
 			std::unique_lock lock(ff_mutex);
-			ff_cv.wait(lock, [&] { return quit or not ff_queue.empty(); });
+			ff_cv.wait(lock, [&] { return quit or not pending.empty() or pending_gain or pending_autocenter; });
 			if (quit)
 				return;
-			request = std::move(ff_queue.front());
-			ff_queue.pop_front();
+			effects = std::exchange(pending, {});
+			gain = std::exchange(pending_gain, std::nullopt);
+			autocenter = std::exchange(pending_autocenter, std::nullopt);
 		}
-		apply(request);
+
+		for (auto & [effect_id, p]: effects)
+		{
+			// Erase first (it came before anything else still pending for this id), then
+			// the latest definition, then the latest play/stop
+			if (p.erase)
+				apply({.id = id, .op = op::erase, .effect_id = effect_id});
+			if (p.upload)
+				apply({.id = id, .op = op::upload, .effect_id = effect_id, .effect = std::move(p.upload)});
+			if (p.play)
+				apply({.id = id, .op = *p.play > 0 ? op::play : op::stop, .effect_id = effect_id, .value = *p.play});
+		}
+		if (gain)
+			apply({.id = id, .op = op::gain, .value = *gain});
+		if (autocenter)
+			apply({.id = id, .op = op::autocenter, .value = *autocenter});
 	}
 }
 

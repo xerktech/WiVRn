@@ -25,6 +25,11 @@ paths:
   - JNI callbacks only queue events; `manager::poll` (application thread, has a JNI env)
     handles them. Native threads can't `FindClass` app classes: reach `Wheel` through
     `MainActivity.wheel`.
+- FF requests are folded into per-effect pending state (latest definition, latest play/stop,
+  erase), latest gain and autocenter; never a FIFO with a cap. Two capped queues failed QA:
+  a flood either grew memory without bound or dropped the stop of a playing effect.
+  - Bounded by `known_effects` (64) plus `device_effects`; an erase of an effect that never
+    reached the wheel just drops its pending entry.
 - Permission is checked with `UsbManager.hasPermission`, never from the intent extra.
 - Not yet checked on hardware: the mode switch message and its endpoint (usb_modeswitch's
   046d:c261 entry), and the HID++ parameter layouts. `log_wheel_ff` logs each FF request.

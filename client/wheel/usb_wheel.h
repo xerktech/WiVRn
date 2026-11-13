@@ -27,10 +27,10 @@
 
 #include <atomic>
 #include <condition_variable>
-#include <deque>
 #include <functional>
 #include <map>
 #include <mutex>
+#include <set>
 #include <thread>
 
 namespace wheel
@@ -97,7 +97,18 @@ private:
 
 	std::mutex ff_mutex;
 	std::condition_variable ff_cv;
-	std::deque<wivrn::to_headset::wheel_ff> ff_queue;
+	// What the wheel should end up with, folded from requests the FF thread hasn't applied
+	struct pending_effect
+	{
+		bool erase = false;                           // destroy the current slot first
+		std::optional<wivrn::wheel_ff_effect> upload; // latest definition
+		std::optional<int32_t> play;                  // latest play count, 0: stop
+	};
+	std::map<int16_t, pending_effect> pending;
+	std::optional<int32_t> pending_gain;
+	std::optional<int32_t> pending_autocenter;
+	std::set<int16_t> known_effects; // uploaded and not erased, as requested
+	uint64_t dropped_ff = 0;
 
 	std::thread reader;
 	std::thread ff_thread;
