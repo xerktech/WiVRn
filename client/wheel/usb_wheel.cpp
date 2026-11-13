@@ -35,8 +35,10 @@ namespace
 {
 constexpr unsigned transfer_timeout_ms = 100;
 constexpr auto reply_timeout = std::chrono::milliseconds(250);
-// An upload queued behind this many requests replaces the older upload of the same effect
+// Uploads and plays are dropped once this many requests wait for a slow wheel
 constexpr size_t ff_queue_max = 64;
+// Stops and erases still get in (so a force can't stay stuck on), up to this hard limit
+constexpr size_t ff_queue_hard_max = 256;
 
 std::vector<uint8_t> read_descriptors(int fd)
 {
@@ -241,9 +243,10 @@ void usb_wheel::read_input_reports()
 		        .data = buf.data(),
 		};
 		int n = ioctl(fd, USBDEVFS_CONTROL, &t);
-		if (n <= 0)
+		if (n != int(buf.size()))
 		{
-			spdlog::debug("wheel {}: GET_REPORT {} refused: {}", id, report_id, n < 0 ? strerror(errno) : "empty");
+			// Refused, or short: a partial report would invent the missing fields
+			spdlog::debug("wheel {}: GET_REPORT {} unusable: {}", id, report_id, n < 0 ? strerror(errno) : "short");
 			continue;
 		}
 		any |= decode_report(layout, std::span(buf).first(n), state);
@@ -331,18 +334,32 @@ void usb_wheel::ff(const wivrn::to_headset::wheel_ff & request)
 {
 	using op = wivrn::to_headset::wheel_ff::operation;
 	std::lock_guard lock(ff_mutex);
-	// A game updating a constant force faster than the wheel takes it only needs the
-	// latest version
-	if (request.op == op::upload and not ff_queue.empty() and ff_queue.back().op == op::upload and ff_queue.back().effect_id == request.effect_id)
-		ff_queue.back() = request;
-	else if (ff_queue.size() >= ff_queue_max and (request.op == op::upload or request.op == op::play))
+
+	// Gain and autocenter: only the latest value matters
+	if (request.op == op::gain or request.op == op::autocenter)
+		std::erase_if(ff_queue, [&](const auto & r) { return r.op == request.op; });
+
+	// The last queued request for the same effect
+	auto last = std::find_if(ff_queue.rbegin(), ff_queue.rend(), [&](const auto & r) {
+		return r.op != op::gain and r.op != op::autocenter and r.effect_id == request.effect_id;
+	});
+	bool has_last = (request.op != op::gain and request.op != op::autocenter) and last != ff_queue.rend();
+
+	if (has_last and last->op == request.op and (request.op == op::upload or request.op == op::stop or request.op == op::erase))
 	{
-		// Stops, erases and gain changes always get in, so a force can't stay stuck on
+		// A game updating a force faster than the wheel takes it only needs the latest
+		// version; a second stop or erase changes nothing
+		*last = request;
+		return;
+	}
+
+	bool control = request.op != op::upload and request.op != op::play;
+	if (ff_queue.size() >= (control ? ff_queue_hard_max : ff_queue_max))
+	{
 		spdlog::warn("wheel {}: force feedback queue full, dropping request", id);
 		return;
 	}
-	else
-		ff_queue.push_back(request);
+	ff_queue.push_back(request);
 	ff_cv.notify_one();
 }
 
