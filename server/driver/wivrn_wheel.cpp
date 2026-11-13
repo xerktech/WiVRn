@@ -38,6 +38,9 @@ constexpr uint16_t max_abs = ABS_MISC; // 0x28
 
 bool allowed_key(uint16_t code)
 {
+	// Mouse buttons and digitizer tools would make the device a pointer or tablet to libinput
+	if ((code >= BTN_MOUSE and code <= BTN_TASK) or (code >= BTN_DIGI and code <= 0x14f))
+		return false;
 	return (code >= BTN_MISC and code <= BTN_GEAR_UP) or (code >= BTN_TRIGGER_HAPPY1 and code <= BTN_TRIGGER_HAPPY40);
 }
 

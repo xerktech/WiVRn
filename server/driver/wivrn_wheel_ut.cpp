@@ -157,6 +157,9 @@ static void test_sanitize()
 	d.keys.push_back(KEY_A);                     // keyboard key
 	d.keys.push_back(BTN_TRIGGER);               // duplicate
 	d.keys.push_back(BTN_TRIGGER_HAPPY3);
+	d.keys.push_back(BTN_LEFT);     // mouse
+	d.keys.push_back(BTN_TOOL_PEN); // digitizer
+	d.keys.push_back(BTN_TOUCH);    // digitizer
 	d.ff.push_back(FF_CUSTOM);
 	d.ff.push_back(0x7f);
 	d.ff_effects_max = 200;
@@ -166,6 +169,7 @@ static void test_sanitize()
 	CHECK(s.axes.size() == 6);
 	CHECK(s.keys.size() == d.keys.size());
 	CHECK(s.keys[11] == 0 and s.keys[12] == 0 and s.keys[13] == BTN_TRIGGER_HAPPY3);
+	CHECK(s.keys[14] == 0 and s.keys[15] == 0 and s.keys[16] == 0);
 	CHECK(s.ff.size() == 7);
 	CHECK(s.ff_effects_max == wheel::max_ff_effects);
 
