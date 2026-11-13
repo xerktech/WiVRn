@@ -107,6 +107,10 @@ jobs:
       if: ${{ matrix.config.preset == 'server' }}
       run: timeout 120 ${{github.workspace}}/build/common/test-handshake-crypto
 
+    - name: Test serialization
+      if: ${{ matrix.config.preset == 'server' }}
+      run: timeout 60 ${{github.workspace}}/build/common/test-serialization
+
     - name: Test XDG base directories
       if: ${{ matrix.config.preset == 'server' }}
       run: timeout 60 ${{github.workspace}}/build/common/test-xdg-base-directory
