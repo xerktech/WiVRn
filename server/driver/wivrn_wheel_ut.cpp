@@ -566,7 +566,8 @@ static void test_uinput()
 	uint8_t ffbits[(FF_CNT + 7) / 8]{};
 	ioctl(fd, EVIOCGBIT(EV_FF, sizeof(ffbits)), ffbits);
 	auto has_ff = [&](int code) { return (ffbits[code / 8] >> (code % 8)) & 1; };
-	CHECK(has_ff(FF_CONSTANT) and has_ff(FF_SPRING) and has_ff(FF_GAIN) and has_ff(FF_AUTOCENTER) and not has_ff(FF_RUMBLE));
+	// The kernel adds FF_RUMBLE itself when FF_PERIODIC is set (it emulates rumble as periodic)
+	CHECK(has_ff(FF_CONSTANT) and has_ff(FF_SPRING) and has_ff(FF_GAIN) and has_ff(FF_AUTOCENTER) and not has_ff(FF_RAMP));
 	input_absinfo abs{};
 	ioctl(fd, EVIOCGABS(ABS_X), &abs);
 	CHECK(abs.minimum == 0 and abs.maximum == 65535);
@@ -627,11 +628,16 @@ static void test_uinput()
 		CHECK(ff[3].op == op::autocenter and ff[3].value == 0x4000);
 	}
 
-	// Erase blocks like upload
+	// Erase blocks like upload; the kernel stops the effect first
 	auto erase = std::async(std::launch::async, [&] { return ioctl(fd, EVIOCRMFF, effect.id); });
-	ff = poll_until(m, 1);
+	ff = poll_until(m, 2);
 	CHECK(erase.wait_for(2s) == std::future_status::ready and erase.get() == 0);
-	CHECK(ff.size() == 1 and ff[0].op == op::erase and ff[0].effect_id == effect.id);
+	CHECK(ff.size() == 2);
+	if (ff.size() == 2)
+	{
+		CHECK(ff[0].op == op::stop and ff[0].effect_id == effect.id);
+		CHECK(ff[1].op == op::erase and ff[1].effect_id == effect.id);
+	}
 
 	// Removing the wheel destroys the device
 	m.remove(1);
