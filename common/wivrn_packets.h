@@ -1077,11 +1077,11 @@ struct wheel_ff
 {
 	enum class operation : uint8_t
 	{
-		upload, // effect_id, effect: store (or replace) the effect
-		erase,  // effect_id
-		play,   // effect_id, value: repeat count
-		stop,   // effect_id
-		gain,   // value: 0..0xffff
+		upload,     // effect_id, effect: store (or replace) the effect
+		erase,      // effect_id
+		play,       // effect_id, value: repeat count
+		stop,       // effect_id
+		gain,       // value: 0..0xffff
 		autocenter, // value: 0..0xffff, 0 is off
 	};
 	uint8_t id;
