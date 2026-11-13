@@ -98,6 +98,10 @@ public:
 	bool forward_mouse = false;
 	bool forward_gamepad = false;
 	bool emulated_gamepad = false;
+	// USB wheel on the headset's port (Logitech G920, XERK-2851)
+	bool forward_wheel = true;
+	// Log every wheel force feedback request (for checking FF on real hardware)
+	bool log_wheel_ff = false;
 
 	std::underlying_type_t<wivrn::from_headset::body_part_mask> body_part_mask = ~0;
 

@@ -18,6 +18,7 @@ public class MainActivity extends android.app.NativeActivity
 
 	private android.content.BroadcastReceiver BatteryInfoReceiver = null;
 	public android.net.ConnectivityManager.NetworkCallback netcb = null;
+	public org.meumeu.wivrn.Wheel wheel = null;
 
 	@Override
 	protected void onCreate(android.os.Bundle savedInstanceState)
@@ -28,5 +29,15 @@ public class MainActivity extends android.app.NativeActivity
 		this.netcb = new org.meumeu.wivrn.NetworkInfoCallback();
 
 		this.registerReceiver(this.BatteryInfoReceiver, new android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED));
+		this.wheel = new org.meumeu.wivrn.Wheel(this);
+		this.wheel.start();
+	}
+
+	@Override
+	protected void onDestroy()
+	{
+		if (this.wheel != null)
+			this.wheel.stop();
+		super.onDestroy();
 	}
 }

@@ -67,6 +67,15 @@ jobs:
           -pthread -lsimdjson -lcurl -lssl -lcrypto -o qr_ut
     - name: Run qr_ut
       run: ./qr_ut
+    # G920 wheel driver logic (XERK-2851): report descriptor, input decoding, HID++ FF encoding
+    - name: Build wheel_ut (ASan/UBSan)
+      run: >
+        g++ -std=c++23 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined
+        -Icommon -Iclient -Iinclude
+        client/tests/wheel_ut.cpp client/wheel/g920.cpp common/crypto.cpp common/smp.cpp
+        -lssl -lcrypto -o wheel_ut
+    - name: Run wheel_ut
+      run: ./wheel_ut
     # Wheels (XERK-2850): packet serialization, the fenrir helper socket against a fake helper,
     # and a real uinput wheel with a force-feedback upload round trip (root + uinput module)
     - name: Build wivrn_wheel_ut (ASan/UBSan)

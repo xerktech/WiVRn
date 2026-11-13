@@ -39,6 +39,7 @@
 #include "utils/i18n.h"
 #include "utils/named_thread.h"
 #include "utils/ranges.h"
+#include "wheel/wheel.h"
 #include "wivrn_packets.h"
 #include <algorithm>
 #include <cmath>
@@ -451,6 +452,18 @@ std::shared_ptr<scenes::stream> scenes::stream::create(std::unique_ptr<wivrn_ses
 
 	self->wifi = application::get_wifi_lock().get_wifi_lock();
 
+	// USB wheels: sent from the wheels' reading threads until stop_stream in ~stream
+	wheel::manager::instance().start_stream([session = self->network_session.get()](from_headset::packets && packet) {
+		try
+		{
+			std::visit([session](auto && p) { session->send_control(std::move(p)); }, std::move(packet));
+		}
+		catch (std::exception & e)
+		{
+			spdlog::debug("wheel: cannot send packet: {}", e.what());
+		}
+	});
+
 	return self;
 }
 
@@ -602,6 +615,9 @@ void scenes::stream::on_unfocused()
 
 scenes::stream::~stream()
 {
+	// Release the wheels before the session they send to goes away
+	wheel::manager::instance().stop_stream();
+
 	exit();
 
 	if (tracking_thread && tracking_thread->joinable())

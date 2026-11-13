@@ -273,7 +273,7 @@ public:
 	void operator()(to_headset::application_list &&);
 	void operator()(to_headset::application_icon &&);
 	void operator()(to_headset::running_applications &&);
-	void operator()(to_headset::wheel_ff &&) {}; // XERK-2851: applied by the wheel driver
+	void operator()(to_headset::wheel_ff &&);
 	void operator()(audio_data &&);
 
 	void push_blit_handle(wivrn::shard_accumulator * decoder, std::shared_ptr<wivrn::shard_accumulator::blit_handle> handle);

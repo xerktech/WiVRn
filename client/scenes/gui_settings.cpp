@@ -553,6 +553,26 @@ void settings_devices(const settings_context & ctx)
 	        .set_bool = [&config](bool v) { config.forward_mouse = v; config.save(); },
 	        .default_bool = default_config.forward_mouse,
 	});
+
+	list.push_back({
+	        .id = "##wheel",
+	        .label = _C("setting name", "Racing wheel"),
+	        .description = _("Forward a Logitech G920 plugged into the headset's USB port, with force feedback."),
+	        .ui = ui_kind::toggle,
+	        .get_bool = [&config] { return config.forward_wheel; },
+	        .set_bool = [&config](bool v) { config.forward_wheel = v; config.save(); },
+	        .default_bool = default_config.forward_wheel,
+	});
+
+	list.push_back({
+	        .id = "##wheel_ff_log",
+	        .label = _C("setting name", "Log wheel force feedback"),
+	        .description = _("Write a log line for every force feedback command sent to the wheel."),
+	        .ui = ui_kind::toggle,
+	        .get_bool = [&config] { return config.log_wheel_ff; },
+	        .set_bool = [&config](bool v) { config.log_wheel_ff = v; config.save(); },
+	        .default_bool = default_config.log_wheel_ff,
+	});
 #endif
 
 	list.push_back({

@@ -28,6 +28,7 @@
 #include "utils/files.h"
 #include "utils/i18n.h"
 #include "vk/check.h"
+#include "wheel/wheel.h"
 #include "wifi_lock.h"
 #include "wivrn_config.h"
 #include "xr/actionset.h"
@@ -60,6 +61,7 @@
 #include <sys/system_properties.h>
 
 #include "android/jnipp.h"
+#include "android/usb_wheel.h"
 #else
 #include "utils/xdg_base_directory.h"
 #include <signal.h>
@@ -1640,6 +1642,7 @@ application::application(application_info info) :
 	// https://docs.oracle.com/javase/7/docs/technotes/guides/jni/spec/types.html
 
 	setup_jni();
+	android_wheel::setup();
 	{
 		jni::object<""> act(app_info.native_app->activity->clazz);
 		auto app = act.call<jni::object<"android/app/Application">>("getApplication");
@@ -1796,6 +1799,12 @@ application::~application()
 void application::loop()
 {
 	poll_events();
+
+	if (config)
+	{
+		wheel::log_ff = config->log_wheel_ff;
+		wheel::manager::instance().poll(config->forward_wheel);
+	}
 
 	auto scene = current_scene();
 	if (not is_session_running())
