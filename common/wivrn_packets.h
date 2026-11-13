@@ -181,6 +181,18 @@ enum class device_id : uint8_t
 	GAMEPAD_THUMBSTICK_RIGHT_X,     // /user/gamepad/input/thumbstick_right/x
 	GAMEPAD_THUMBSTICK_RIGHT_Y,     // /user/gamepad/input/thumbstick_right/y
 };
+} // namespace wivrn
+
+// device_id has more than 128 values (gamepad inputs are 128+), past magic_enum's default range
+template <>
+struct magic_enum::customize::enum_range<wivrn::device_id>
+{
+	static constexpr int min = 0;
+	static constexpr int max = 255;
+};
+
+namespace wivrn
+{
 
 enum class interaction_profile : uint8_t
 {
