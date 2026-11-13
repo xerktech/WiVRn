@@ -28,6 +28,7 @@ jobs:
     outputs:
       sha: ${{ steps.rev.outputs.sha }}
       version: ${{ steps.rev.outputs.version }}
+      release: ${{ steps.rev.outputs.release }}
 
     steps:
     - uses: actions/checkout@v6
@@ -45,6 +46,17 @@ jobs:
         git tag -l 'apk-*' | xargs -r git tag -d
         echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
         echo "version=$(git describe --tags --always | sed 's/^v\([0-9]\)/\1/')" >> "$GITHUB_OUTPUT"
+        # Release and APK name: wivrn-quest-MAJOR.MINOR.PATCH, where MAJOR.MINOR is the
+        # upstream release this fork is on and PATCH counts commits since its vMAJOR.MINOR
+        # tag, so it grows with every master commit.
+        TAG=$(git describe --tags --abbrev=0)
+        MM=$(echo "$TAG" | sed -E 's/^v?([0-9]+)\.([0-9]+).*/\1.\2/')
+        if ! [[ "$MM" =~ ^[0-9]+\.[0-9]+$ ]]; then
+          echo "::error::cannot read MAJOR.MINOR from tag $TAG"
+          exit 1
+        fi
+        BASE=$(git rev-parse -q --verify "refs/tags/v$MM" || git rev-parse -q --verify "refs/tags/$MM" || echo "$TAG")
+        echo "release=wivrn-quest-$MM.$(git rev-list --count "$BASE..HEAD")" >> "$GITHUB_OUTPUT"
 
     # Gradle distribution and the Android plugin's dependencies.
     - uses: actions/cache@v5
@@ -95,7 +107,7 @@ jobs:
         BUILD_TOOLS=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 | sort -V | tail -1)
         "$BUILD_TOOLS/apksigner" verify --print-certs "$APK"
         mkdir apk
-        mv "$APK" apk/wivrn-xerktech-${{ steps.rev.outputs.sha }}.apk
+        mv "$APK" apk/${{ steps.rev.outputs.release }}.apk
 
     - name: Archive APK
       uses: actions/upload-artifact@v7
@@ -123,9 +135,9 @@ jobs:
       with:
         tag_name: "apk-${{ needs.build-android-only.outputs.sha }}"
         target_commitish: ${{ needs.build-android-only.outputs.sha }}
-        name: "Quest APK ${{ needs.build-android-only.outputs.version }}"
+        name: ${{ needs.build-android-only.outputs.release }}
         body: |
-          Signed Quest client built from ${{ needs.build-android-only.outputs.sha }}.
+          Signed Quest client ${{ needs.build-android-only.outputs.version }}, built from ${{ needs.build-android-only.outputs.sha }}.
           Only connects to a wivrn-server built from this same commit.
           Install: docs/xerktech-quest.md.
         draft: false
