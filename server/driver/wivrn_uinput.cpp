@@ -456,7 +456,7 @@ void wivrn_uinput_wheels::send(uint8_t id, std::span<const wivrn::wheel::event> 
 		emit_ev(it->second.get_fd(), e.type, e.code, e.value);
 }
 
-void wivrn_uinput_wheels::poll(std::vector<wivrn::to_headset::wheel_ff> & ff, std::vector<std::string> & errors)
+void wivrn_uinput_wheels::poll(std::vector<wivrn::to_headset::wheel_ff> & ff, std::vector<std::string> & errors, std::vector<uint8_t> &)
 {
 	using op = wivrn::to_headset::wheel_ff::operation;
 	for (auto & [id, dev]: devices)

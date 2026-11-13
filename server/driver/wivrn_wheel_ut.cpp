@@ -154,6 +154,7 @@ static void test_sanitize()
 	d.axes.push_back({ABS_X, 0, 10, 0, 0});      // duplicate
 	d.axes.push_back({ABS_MT_SLOT, 0, 9, 0, 0}); // not a wheel axis
 	d.axes.push_back({ABS_RX, 5, 1, 0, 0});      // min > max
+	d.axes.push_back({ABS_RY, 7, 7, 0, 0});      // min == max: the helper refuses it
 	d.keys.push_back(KEY_A);                     // keyboard key
 	d.keys.push_back(BTN_TRIGGER);               // duplicate
 	d.keys.push_back(BTN_TRIGGER_HAPPY3);
@@ -210,7 +211,7 @@ struct fake_backend : wheel::backend
 			throw std::runtime_error("send failed");
 		sent.emplace_back(e.begin(), e.end());
 	}
-	void poll(std::vector<to_headset::wheel_ff> & ff, std::vector<std::string> &) override
+	void poll(std::vector<to_headset::wheel_ff> & ff, std::vector<std::string> &, std::vector<uint8_t> &) override
 	{
 		ff.insert(ff.end(), pending.begin(), pending.end());
 		pending.clear();
@@ -274,8 +275,32 @@ static void test_manager()
 	CHECK(m.size() == wheel::max_wheels);
 	CHECK(m.take_errors().size() == 1);
 
+	// A create that keeps failing backs off: 1 s, then 2 s
+	m.clear();
+	b.fail_create = 2;
+	m.add(g920(6));
+	std::this_thread::sleep_for(1100ms);
+	m.state({.id = 6, .axes = {{ABS_X, 1}}});
+	CHECK(b.fail_create == 0 and b.log.back() != "create 6");
+	std::this_thread::sleep_for(1100ms);
+	m.state({.id = 6, .axes = {{ABS_X, 1}}});
+	CHECK(b.log.back() != "create 6"); // 2 s not over yet
+	std::this_thread::sleep_for(1000ms);
+	m.state({.id = 6, .axes = {{ABS_X, 1}}});
+	CHECK(b.log.back() == "create 6");
+	CHECK(m.take_errors().size() == 2);
+
 	m.clear();
 	CHECK(m.size() == 0);
+
+	// Nothing left after sanitizing: not created at all
+	auto empty = g920(5);
+	empty.axes = {{ABS_MT_SLOT, 0, 9, 0, 0}, {ABS_X, 3, 3, 0, 0}};
+	empty.keys = {KEY_A, BTN_LEFT};
+	auto before = b.log.size();
+	m.add(empty);
+	CHECK(m.size() == 0 and b.log.size() == before);
+	CHECK(m.take_errors().size() == 1);
 	CHECK(std::ranges::count(b.log, std::string("destroy 2")) == 1);
 }
 
@@ -384,7 +409,7 @@ static void test_helper_socket()
 	h.send(R"({"op":"ff","id":9,"kind":"gain","value":1})");                         // unknown wheel
 	h.send(R"({"op":"ff","id":1,"kind":"upload","effect":{"type":82,"id":70000}})"); // bad id
 	h.send(R"(not json)");
-	h.send(R"({"op":"error","id":1,"msg":"nope"})");
+	h.send(R"({"op":"error","id":9,"msg":"nope"})");
 	h.send(R"({"op":"ff","id":1,"kind":"upload","effect":{"type":96}})"); // FF_GAIN is no effect
 
 	auto ff = poll_until(m, 7);
@@ -406,17 +431,34 @@ static void test_helper_socket()
 	}
 	CHECK(m.take_errors().size() == 4);
 
+	// The helper refuses wheel 1 (or no longer has it): created again after the backoff
+	h.send(R"({"op":"error","id":1,"msg":"no wheel 1"})");
+	std::this_thread::sleep_for(50ms);
+	m.poll_ff();
+	CHECK(m.take_errors().size() == 1);
+	m.state({.id = 1, .axes = {{ABS_X, 5}}});
+	pollfd quiet{.fd = h.conn, .events = POLLIN};
+	CHECK(::poll(&quiet, 1, 100) == 0); // backoff: nothing sent
+	std::this_thread::sleep_for(1100ms);
+	m.state({.id = 1, .axes = {{ABS_X, 5}}});
+	CHECK(h.recv()["op"] == "create");
+	CHECK(h.recv()["events"][0]["value"] == 5);
+
 	m.remove(1);
 	auto destroy = h.recv();
 	CHECK(destroy == json({{"op", "destroy"}, {"id", 1}}));
 
-	// The helper restarts: the wheel is created again on a new connection
+	// The helper restarts: every wheel is created again on a new connection, including one
+	// that was idle meanwhile
 	m.add(g920(2));
+	m.add(g920(3));
+	CHECK(h.recv()["op"] == "create");
 	CHECK(h.recv()["op"] == "create");
 	::close(h.conn);
 	h.conn = -1;
-	m.poll_ff();
-	CHECK(not m.take_errors().empty());
+	for (int i = 0; i < 3; ++i)
+		m.poll_ff();
+	CHECK(m.take_errors().size() == 1); // reported once, not on every poll
 	m.state({.id = 2, .axes = {{ABS_X, 1}}});
 	std::this_thread::sleep_for(1100ms);
 	m.state({.id = 2, .axes = {{ABS_X, 2}}});
@@ -425,6 +467,10 @@ static void test_helper_socket()
 	CHECK(again["op"] == "create" and again["id"] == 2);
 	auto ev2 = h.recv();
 	CHECK(ev2["op"] == "events" and ev2["events"][0]["value"] == 2);
+	m.state({.id = 3, .axes = {{ABS_X, 7}}});
+	auto again3 = h.recv();
+	CHECK(again3["op"] == "create" and again3["id"] == 3);
+	CHECK(h.recv()["events"][0]["value"] == 7);
 }
 
 static std::string event_node(const std::string & sysname)

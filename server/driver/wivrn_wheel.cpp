@@ -24,6 +24,7 @@
 #include <system_error>
 
 #include <nlohmann/json.hpp>
+#include <set>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -173,12 +174,19 @@ class helper_backend : public backend
 {
 	std::string path;
 	int fd = -1;
+	std::vector<char> buf = std::vector<char>(65536);
+	// Wheels created on this connection, and those lost since the last poll
+	std::set<uint8_t> live;
+	std::vector<uint8_t> lost;
 
 	void disconnect()
 	{
 		if (fd >= 0)
 			::close(fd);
 		fd = -1;
+		// The helper destroys a closed connection's wheels
+		lost.insert(lost.end(), live.begin(), live.end());
+		live.clear();
 	}
 
 	void connect()
@@ -191,15 +199,15 @@ class helper_backend : public backend
 		int s = ::socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
 		if (s < 0)
 			throw std::system_error(errno, std::generic_category(), "wheel helper socket");
+		// A stalled helper must not stall the network thread for long; also bounds connect
+		timeval timeout{.tv_sec = 0, .tv_usec = 200'000};
+		setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
 		if (::connect(s, (sockaddr *)&addr, sizeof(addr)) < 0)
 		{
 			int e = errno;
 			::close(s);
 			throw std::system_error(e, std::generic_category(), "connect to wheel helper " + path);
 		}
-		// A stalled helper must not stall the network thread for long
-		timeval timeout{.tv_sec = 0, .tv_usec = 200'000};
-		setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
 		fd = s;
 	}
 
@@ -226,6 +234,12 @@ class helper_backend : public backend
 		if (op == "error")
 		{
 			errors.push_back("wheel helper: " + j.value("msg", std::string("error")) + " (wheel " + std::to_string(j.value("id", -1)) + ")");
+			// A refused create, or events for a wheel the helper does not have: the wheel is gone
+			if (auto id = j.find("id"); id != j.end() and id->is_number_unsigned() and id->get<uint64_t>() <= 255)
+			{
+				if (live.erase(id->get<uint8_t>()))
+					lost.push_back(id->get<uint8_t>());
+			}
 			return;
 		}
 		if (op != "ff")
@@ -295,10 +309,14 @@ public:
 		        {"ff", desc.ff},
 		        {"ff_effects_max", desc.ff_effects_max},
 		});
+		live.insert(desc.id);
+		std::erase(lost, desc.id);
 	}
 
 	void destroy(uint8_t id) override
 	{
+		live.erase(id);
+		std::erase(lost, id);
 		if (fd >= 0)
 			send_json({{"op", "destroy"}, {"id", id}});
 	}
@@ -311,9 +329,15 @@ public:
 		send_json({{"op", "events"}, {"id", id}, {"events", std::move(e)}});
 	}
 
-	void poll(std::vector<to_headset::wheel_ff> & ff, std::vector<std::string> & errors) override
+	void poll(std::vector<to_headset::wheel_ff> & ff, std::vector<std::string> & errors, std::vector<uint8_t> & lost_ids) override
 	{
-		std::vector<char> buf(65536);
+		poll_socket(ff, errors);
+		lost_ids.insert(lost_ids.end(), lost.begin(), lost.end());
+		lost.clear();
+	}
+
+	void poll_socket(std::vector<to_headset::wheel_ff> & ff, std::vector<std::string> & errors)
+	{
 		while (fd >= 0)
 		{
 			auto n = ::recv(fd, buf.data(), buf.size(), MSG_DONTWAIT | MSG_TRUNC);
@@ -322,7 +346,6 @@ public:
 			if (n <= 0)
 			{
 				errors.push_back(n == 0 ? "wheel helper closed the connection" : std::string("wheel helper: ") + strerror(errno));
-				// The helper destroys a closed connection's wheels: the next send fails and recreates them
 				disconnect();
 				return;
 			}
@@ -366,7 +389,7 @@ from_headset::wheel_added sanitize(from_headset::wheel_added desc)
 	std::vector<from_headset::wheel_added::axis> axes;
 	for (const auto & a: desc.axes)
 	{
-		if (a.code > max_abs or a.min > a.max)
+		if (a.code > max_abs or a.min >= a.max)
 			continue;
 		if (std::ranges::any_of(axes, [&](const auto & b) { return b.code == a.code; }))
 			continue;
@@ -483,8 +506,19 @@ void manager::fail(device & d, const std::exception & e)
 		catch (...)
 		{}
 	}
+	back_off(d);
+}
+
+void manager::back_off(device & d)
+{
+	// A create the helper refuses for its content is refused every time: don't retry it every
+	// second forever. A wheel that worked for a while starts again at 1 s.
+	auto now = std::chrono::steady_clock::now();
+	if (d.created and now - d.created_at > std::chrono::seconds(10))
+		d.failures = 0;
 	d.created = false;
-	d.retry_at = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+	d.retry_at = now + std::min<std::chrono::seconds>(std::chrono::seconds(1 << d.failures), std::chrono::seconds(60));
+	d.failures = std::min(d.failures + 1, 6);
 }
 
 void manager::try_create(device & d)
@@ -495,6 +529,7 @@ void manager::try_create(device & d)
 	{
 		sink->create(d.desc);
 		d.created = true;
+		d.created_at = std::chrono::steady_clock::now();
 		// Every value is sent again on the next state
 		std::ranges::fill(d.abs, std::numeric_limits<int32_t>::min());
 		d.keys.assign(d.desc.keys.size(), false);
@@ -513,8 +548,14 @@ void manager::add(from_headset::wheel_added desc)
 		errors.push_back("wheel " + std::to_string(desc.id) + ": too many wheels");
 		return;
 	}
+	desc = sanitize(std::move(desc));
+	if (desc.axes.empty() and std::ranges::all_of(desc.keys, [](uint16_t k) { return k == 0; }))
+	{
+		errors.push_back("wheel " + std::to_string(desc.id) + ": no usable axis or button");
+		return;
+	}
 	device d{
-	        .desc = sanitize(std::move(desc)),
+	        .desc = std::move(desc),
 	        .abs = std::vector<int32_t>(max_abs + 1, std::numeric_limits<int32_t>::min()),
 	};
 	d.keys.assign(d.desc.keys.size(), false);
@@ -599,13 +640,20 @@ void manager::state(const from_headset::wheel_state & state)
 std::vector<to_headset::wheel_ff> manager::poll_ff()
 {
 	std::vector<to_headset::wheel_ff> ff;
+	std::vector<uint8_t> lost;
 	try
 	{
-		sink->poll(ff, errors);
+		sink->poll(ff, errors, lost);
 	}
 	catch (const std::exception & e)
 	{
 		errors.push_back(e.what());
+	}
+	// Recreated on their next state, after the usual backoff
+	for (auto id: lost)
+	{
+		if (auto it = devices.find(id); it != devices.end() and it->second.created)
+			back_off(it->second);
 	}
 	std::erase_if(ff, [&](const auto & f) {
 		auto it = devices.find(f.id);

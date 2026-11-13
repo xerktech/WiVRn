@@ -20,8 +20,14 @@ paths:
     Keep them equal.
   - The helper acks kernel FF uploads itself; local uinput acks at once in `poll`. Either way the
     game never waits on the headset.
-  - A closed connection drops its wheels on the helper: the next send fails and `manager` recreates
-    the wheel (1 s backoff), reconnecting.
+  - A closed connection drops all its wheels on the helper, and an `error` naming a wheel means the
+    helper doesn't have it: the backend reports those ids as lost from `poll`, and `manager`
+    recreates each on its next state. Without that, a wheel idle during a restart stays dead.
+  - Backoff doubles per failure in a row (1 s .. 60 s), reset after 10 s of working: a create
+    the helper refuses for its content fails every time.
+  - The helper's create on an existing id replaces it and destroy of an unknown id is silent, so a
+    late error for an old instance costs one extra create, not a loop.
+  - `manager::add` refuses a wheel with no axis or key left after `sanitize` (the helper does too).
 - `wheel_ff` goes on the control channel: a lost upload leaves the wheel without an effect.
 - Wheels are cleared on `pause_session`: the headset must send `wheel_added` again on reconnect.
 - Tests: `server/driver/wivrn_wheel_ut.cpp` (Sockets-UT.yml). Its uinput part needs root and the

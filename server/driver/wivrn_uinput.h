@@ -54,7 +54,7 @@ public:
 	void create(const wivrn::from_headset::wheel_added & desc) override;
 	void destroy(uint8_t id) override;
 	void send(uint8_t id, std::span<const wivrn::wheel::event> events) override;
-	void poll(std::vector<wivrn::to_headset::wheel_ff> & ff, std::vector<std::string> & errors) override;
+	void poll(std::vector<wivrn::to_headset::wheel_ff> & ff, std::vector<std::string> & errors, std::vector<uint8_t> & lost) override;
 
 	// "inputN", the device's directory in /sys/devices/virtual/input
 	std::string sysname(uint8_t id) const;

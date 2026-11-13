@@ -59,8 +59,9 @@ public:
 	virtual void destroy(uint8_t id) = 0;
 	// events end with a SYN_REPORT
 	virtual void send(uint8_t id, std::span<const event> events) = 0;
-	// Appends force-feedback requests and non-fatal errors since the last call
-	virtual void poll(std::vector<to_headset::wheel_ff> & ff, std::vector<std::string> & errors) = 0;
+	// Appends force-feedback requests, non-fatal errors, and wheels that no longer exist on the
+	// backend's side (to be created again), since the last call
+	virtual void poll(std::vector<to_headset::wheel_ff> & ff, std::vector<std::string> & errors, std::vector<uint8_t> & lost) = 0;
 };
 
 // fenrir's helper over a unix SOCK_SEQPACKET socket, one JSON object per packet.
@@ -82,7 +83,9 @@ class manager
 		std::vector<int32_t> abs;       // last value, indexed by axis code
 		std::vector<bool> keys;         // last state, indexed like desc.keys
 		bool created = false;
+		std::chrono::steady_clock::time_point created_at{};
 		std::chrono::steady_clock::time_point retry_at{};
+		int failures = 0; // in a row: the backoff doubles, up to a minute
 	};
 
 	std::unique_ptr<backend> sink;
@@ -91,6 +94,7 @@ class manager
 
 	void try_create(device &);
 	void fail(device &, const std::exception &);
+	void back_off(device &);
 
 public:
 	explicit manager(std::unique_ptr<backend> sink);
