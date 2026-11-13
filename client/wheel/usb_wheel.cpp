@@ -35,8 +35,6 @@ namespace
 {
 constexpr unsigned transfer_timeout_ms = 100;
 constexpr auto reply_timeout = std::chrono::milliseconds(250);
-// Effects the server may define at once (it caps ff_effects_max at 64)
-constexpr size_t max_known_effects = 64;
 
 std::vector<uint8_t> read_descriptors(int fd)
 {
@@ -347,7 +345,7 @@ void usb_wheel::ff(const wivrn::to_headset::wheel_ff & request)
 			if (not request.effect)
 				return;
 			// Bounded by the effects the server may have (64); ids beyond that are junk
-			if (not known_effects.contains(request.effect_id) and known_effects.size() >= max_known_effects)
+			if (not known_effects.contains(request.effect_id) and known_effects.size() >= ff_effects_max)
 			{
 				if (dropped_ff++ % 1000 == 0)
 					spdlog::warn("wheel {}: too many force feedback effects, dropping upload ({} dropped)", id, dropped_ff);
@@ -367,8 +365,13 @@ void usb_wheel::ff(const wivrn::to_headset::wheel_ff & request)
 			if (not known_effects.contains(request.effect_id))
 				return;
 			known_effects.erase(request.effect_id);
-			// Whatever was pending for the old effect no longer matters
-			pending[request.effect_id] = {.erase = true};
+			// Whatever was pending for the old effect no longer matters; if it never
+			// reached the wheel there is nothing to destroy either. This keeps pending to
+			// at most the known effects plus the ones on the wheel.
+			if (device_effects.contains(request.effect_id))
+				pending[request.effect_id] = {.erase = true};
+			else
+				pending.erase(request.effect_id);
 			break;
 	}
 	ff_cv.notify_one();
@@ -389,6 +392,14 @@ void usb_wheel::ff_loop()
 			if (quit)
 				return;
 			effects = std::exchange(pending, {});
+			// What the wheel holds once this batch is applied
+			for (auto & [effect_id, p]: effects)
+			{
+				if (p.erase)
+					device_effects.erase(effect_id);
+				if (p.upload)
+					device_effects.insert(effect_id);
+			}
 			gain = std::exchange(pending_gain, std::nullopt);
 			autocenter = std::exchange(pending_autocenter, std::nullopt);
 		}

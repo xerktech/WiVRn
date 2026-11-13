@@ -107,7 +107,8 @@ private:
 	std::map<int16_t, pending_effect> pending;
 	std::optional<int32_t> pending_gain;
 	std::optional<int32_t> pending_autocenter;
-	std::set<int16_t> known_effects; // uploaded and not erased, as requested
+	std::set<int16_t> known_effects;  // uploaded and not erased, as requested; at most ff_effects_max
+	std::set<int16_t> device_effects; // uploaded to the wheel (or being), not erased
 	uint64_t dropped_ff = 0;
 
 	std::thread reader;
