@@ -29,6 +29,12 @@ using namespace wivrn;
 
 namespace
 {
+// std::byte has its own traits but must hash like any enum with no enumerators did before,
+// or the protocol hash would change
+enum class no_enumerators : uint8_t
+{};
+static_assert(serialization_type_hash<std::byte>(0) == serialization_type_hash<no_enumerators>(0));
+
 int failures = 0;
 
 void check(bool ok, const char * what)
