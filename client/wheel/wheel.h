@@ -71,7 +71,8 @@ class manager
 	bool enabled = true;
 
 	void open_wheel(const std::string & path, const device &);
-	void close_wheel(const std::string & path, bool send_removed);
+	// By value: callers pass the map's own key, which erasing the wheel frees
+	void close_wheel(std::string path, bool send_removed);
 	void handle(const std::string & path, device &);
 
 public:

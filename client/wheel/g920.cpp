@@ -646,7 +646,9 @@ std::optional<std::vector<uint8_t>> download_params(uint8_t slot, const wivrn::w
 					return std::nullopt;
 			}
 			common(20, type);
-			put16(p, 6, directed(w->magnitude, e.direction));
+			// Magnitude as is, like the kernel driver: the wheel has one axis and a
+			// periodic effect at direction 0 must still play
+			put16(p, 6, w->magnitude);
 			put16(p, 8, w->offset);
 			put16(p, 10, w->period);
 			put16(p, 12, w->phase);
@@ -698,9 +700,13 @@ std::vector<uint8_t> gain_params(uint16_t gain)
 	return {uint8_t(gain >> 8), uint8_t(gain & 0xff), 0, 0};
 }
 
-std::vector<uint16_t> supported_effects()
+std::vector<uint16_t> supported_effects(uint16_t version)
 {
-	return {FF_CONSTANT, FF_PERIODIC, FF_SQUARE, FF_TRIANGLE, FF_SINE, FF_SAW_UP, FF_SAW_DOWN, FF_RAMP, FF_SPRING, FF_DAMPER, FF_FRICTION, FF_INERTIA, FF_GAIN, FF_AUTOCENTER};
+	std::vector<uint16_t> res{FF_CONSTANT, FF_PERIODIC, FF_SQUARE, FF_TRIANGLE, FF_SINE, FF_SAW_UP, FF_SAW_DOWN, FF_SPRING, FF_DAMPER, FF_GAIN, FF_AUTOCENTER};
+	// Like the kernel driver: early firmware (bcdDevice low byte <= 1) lacks these
+	if ((version & 0xff) > 1)
+		res.insert(res.end(), {FF_RAMP, FF_FRICTION, FF_INERTIA});
+	return res;
 }
 } // namespace ff
 } // namespace hidpp

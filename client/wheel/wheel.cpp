@@ -129,7 +129,7 @@ void manager::open_wheel(const std::string & path, const device & dev)
 	}
 }
 
-void manager::close_wheel(const std::string & path, bool send_removed)
+void manager::close_wheel(std::string path, bool send_removed)
 {
 	auto it = wheels.find(path);
 	if (it == wheels.end())

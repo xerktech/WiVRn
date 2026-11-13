@@ -26,6 +26,11 @@ public class Wheel extends android.content.BroadcastReceiver
 	{
 		this.ctx = ctx;
 		this.usb = (UsbManager)ctx.getSystemService(Context.USB_SERVICE);
+	}
+
+	// Called once MainActivity.wheel is set: native code reaches this object through it
+	public void start()
+	{
 		if (usb == null)
 			return;
 
@@ -42,6 +47,20 @@ public class Wheel extends android.content.BroadcastReceiver
 
 		for (UsbDevice dev : usb.getDeviceList().values())
 			report(dev);
+	}
+
+	public void stop()
+	{
+		if (usb == null)
+			return;
+		try
+		{
+			ctx.unregisterReceiver(this);
+		}
+		catch (IllegalArgumentException e)
+		{
+			// not registered
+		}
 	}
 
 	private static boolean wanted(UsbDevice dev)

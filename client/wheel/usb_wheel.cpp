@@ -122,6 +122,7 @@ usb_wheel::usb_wheel(int fd, uint8_t id, uint16_t vendor, uint16_t product, std:
 		if (not parsed)
 			throw std::runtime_error("unusable HID report descriptor");
 		layout = std::move(*parsed);
+		read_input_reports();
 
 		reader = std::thread([this] { read_loop(); });
 		init_ff();
@@ -146,7 +147,7 @@ usb_wheel::usb_wheel(int fd, uint8_t id, uint16_t vendor, uint16_t product, std:
 	};
 	if (ff_index)
 	{
-		added.ff = hidpp::ff::supported_effects();
+		added.ff = hidpp::ff::supported_effects(version);
 		added.ff_effects_max = ff_effects_max;
 	}
 
@@ -166,7 +167,11 @@ usb_wheel::usb_wheel(int fd, uint8_t id, uint16_t vendor, uint16_t product, std:
 
 usb_wheel::~usb_wheel()
 {
-	quit = true;
+	{
+		// Under the lock, or ff_loop may miss the wakeup between its check and its wait
+		std::lock_guard lock(ff_mutex);
+		quit = true;
+	}
 	ff_cv.notify_all();
 	if (ff_thread.joinable())
 		ff_thread.join();
@@ -211,6 +216,40 @@ std::vector<uint8_t> usb_wheel::read_report_descriptor()
 		throw std::runtime_error(std::string("reading report descriptor: ") + strerror(errno));
 	buf.resize(n);
 	return buf;
+}
+
+void usb_wheel::read_input_reports()
+{
+	// Like usbhid at init: ask for each input report's current value (GET_REPORT). A
+	// device may refuse; its first interrupt report then gives the state.
+	std::map<uint8_t, uint32_t> bits; // report id -> bits used
+	for (const auto & f: layout.fields)
+		bits[f.report_id] = std::max(bits[f.report_id], f.bit_offset + f.bit_size);
+
+	input_state state = initial_state(layout);
+	bool any = false;
+	for (auto [report_id, size]: bits)
+	{
+		std::vector<uint8_t> buf((layout.report_ids ? 1 : 0) + (size + 7) / 8);
+		usbdevfs_ctrltransfer t{
+		        .bRequestType = 0xa1,                   // device to host, class, interface
+		        .bRequest = 0x01,                       // GET_REPORT
+		        .wValue = uint16_t(0x0100 | report_id), // input report, id
+		        .wIndex = usb.hid->number,
+		        .wLength = uint16_t(buf.size()),
+		        .timeout = 250,
+		        .data = buf.data(),
+		};
+		int n = ioctl(fd, USBDEVFS_CONTROL, &t);
+		if (n <= 0)
+		{
+			spdlog::debug("wheel {}: GET_REPORT {} refused: {}", id, report_id, n < 0 ? strerror(errno) : "empty");
+			continue;
+		}
+		any |= decode_report(layout, std::span(buf).first(n), state);
+	}
+	if (any)
+		seed = state;
 }
 
 bool usb_wheel::write(std::span<const uint8_t> report)
@@ -296,8 +335,9 @@ void usb_wheel::ff(const wivrn::to_headset::wheel_ff & request)
 	// latest version
 	if (request.op == op::upload and not ff_queue.empty() and ff_queue.back().op == op::upload and ff_queue.back().effect_id == request.effect_id)
 		ff_queue.back() = request;
-	else if (ff_queue.size() >= ff_queue_max)
+	else if (ff_queue.size() >= ff_queue_max and (request.op == op::upload or request.op == op::play))
 	{
+		// Stops, erases and gain changes always get in, so a force can't stay stuck on
 		spdlog::warn("wheel {}: force feedback queue full, dropping request", id);
 		return;
 	}
@@ -414,7 +454,9 @@ void usb_wheel::apply(const wivrn::to_headset::wheel_ff & request)
 void usb_wheel::read_loop()
 {
 	std::vector<uint8_t> buf(std::max<size_t>(usb.hid->in.max_packet, hidpp::very_long_length));
-	input_state state = initial_state(layout);
+	// No state goes out until the device has told us one: zeros would be full left lock
+	bool have_state = seed.has_value();
+	input_state state = seed.value_or(initial_state(layout));
 	input_state sent = state;
 	bool sent_once = false;
 	int errors = 0;
@@ -452,11 +494,11 @@ void usb_wheel::read_loop()
 				reply_cv.notify_all();
 				continue;
 			}
-			decode_report(layout, report, state);
+			have_state |= decode_report(layout, report, state);
 		}
 
 		// Nothing goes out before wheel_added; the first state after it is complete
-		if (announced and (not sent_once or state != sent))
+		if (announced and have_state and (not sent_once or state != sent))
 		{
 			auto packet = sent_once ? diff(id, layout, sent, state) : diff(id, layout, {}, state);
 			send(std::move(packet));

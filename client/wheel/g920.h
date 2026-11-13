@@ -209,8 +209,9 @@ std::vector<uint8_t> autocenter_params(uint16_t magnitude);
 
 std::vector<uint8_t> gain_params(uint16_t gain);
 
-// Effect types the wheel plays, as Linux FF_* codes, plus FF_GAIN and FF_AUTOCENTER
-std::vector<uint16_t> supported_effects();
+// Effect types the wheel plays, as Linux FF_* codes, plus FF_GAIN and FF_AUTOCENTER.
+// version is the device's bcdDevice.
+std::vector<uint16_t> supported_effects(uint16_t version);
 } // namespace ff
 } // namespace hidpp
 

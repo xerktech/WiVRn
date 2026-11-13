@@ -20,9 +20,11 @@
 
 #include "../wheel/g920.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <linux/input.h>
+#include <memory>
 
 static int failures = 0;
 
@@ -231,9 +233,13 @@ static void test_decode()
 	CHECK(not wheel::decode_report(layout, {}, state));
 	CHECK(state == copy);
 
-	// A short report only updates the fields it holds
-	report = {0x01, 0xff, 0xff};
-	CHECK(wheel::decode_report(layout, report, state));
+	// A short report only updates the fields it holds. A fresh, exactly sized heap buffer:
+	// reading past it (a missing bounds check) is caught by ASan.
+	auto short_report = std::make_unique<uint8_t[]>(3);
+	short_report[0] = 0x01;
+	short_report[1] = 0xff;
+	short_report[2] = 0xff;
+	CHECK(wheel::decode_report(layout, std::span<const uint8_t>(short_report.get(), 3), state));
 	CHECK(state.axes[0] == 0xffff and state.axes[3] == 0x10);
 }
 
@@ -309,7 +315,7 @@ static void test_ff()
 	CHECK(not download_params(0, e));
 
 	// Periodic: 20 params, needs a very long report
-	e.direction = 0x4000; // sin = 1
+	e.direction = 0; // magnitude is not scaled by direction
 	e.u = wivrn::wheel_ff_effect::periodic{.waveform = FF_SINE, .period = 100, .magnitude = 0x1000, .offset = -2, .phase = 0};
 	p = download_params(0, e);
 	CHECK(p and p->size() == 20);
@@ -331,7 +337,7 @@ static void test_ff()
 	        .right_coeff = 0x2000,
 	        .left_coeff = -0x2000,
 	        .deadband = 0x0200,
-	        .center = 0x0100,
+	        .center = 0x0300,
 	}};
 	p = download_params(0, e);
 	CHECK(p and p->size() == 18);
@@ -341,7 +347,7 @@ static void test_ff()
 		CHECK((*p)[6] == 0x40 and (*p)[7] == 0x00);   // left saturation 0x8000 >> 1
 		CHECK((*p)[8] == 0xe0 and (*p)[9] == 0x00);   // left coeff
 		CHECK((*p)[10] == 0x01 and (*p)[11] == 0x00); // deadband 0x200 >> 1
-		CHECK((*p)[12] == 0x01 and (*p)[13] == 0x00); // center
+		CHECK((*p)[12] == 0x03 and (*p)[13] == 0x00); // center
 		CHECK((*p)[14] == 0x20 and (*p)[15] == 0x00); // right coeff
 		CHECK((*p)[16] == 0x7f and (*p)[17] == 0xff); // right saturation
 	}
@@ -350,6 +356,12 @@ static void test_ff()
 	CHECK(a.size() == 18 and a[1] == (type_spring | autostart));
 	CHECK(a[6] == 0x7f and a[7] == 0xff and a[8] == 0x1f and a[9] == 0xff);
 	CHECK(a[14] == 0x1f and a[15] == 0xff and a[16] == 0x7f and a[17] == 0xff);
+
+	// Early firmware lacks ramp, friction and inertia
+	auto old_fw = supported_effects(0x0001);
+	auto new_fw = supported_effects(0x1234);
+	CHECK(std::ranges::find(old_fw, FF_RAMP) == old_fw.end() and std::ranges::find(old_fw, FF_SPRING) != old_fw.end());
+	CHECK(std::ranges::find(new_fw, FF_RAMP) != new_fw.end() and std::ranges::find(new_fw, FF_INERTIA) != new_fw.end());
 
 	auto g = gain_params(0xabcd);
 	CHECK(g.size() == 4 and g[0] == 0xab and g[1] == 0xcd);

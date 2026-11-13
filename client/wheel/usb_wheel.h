@@ -105,6 +105,8 @@ private:
 	void claim();
 	void release();
 	std::vector<uint8_t> read_report_descriptor();
+	void read_input_reports();
+	std::optional<input_state> seed; // input state read at init, before the reading thread
 
 	bool write(std::span<const uint8_t> report);
 	// Sends a request on the FF feature and waits for its reply
