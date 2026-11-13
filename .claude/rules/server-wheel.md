@@ -16,8 +16,8 @@ paths:
 - Helper socket: SOCK_SEQPACKET, one JSON object per packet; keys agreed with fenrir XERK-2852
   (`create`/`events`/`destroy` → `created`/`error`/`ff`). Rename a key on both sides at once.
   - `sanitize`'s limits (4 wheels, ≤64 effects, key/abs ranges without mouse or digitizer
-    buttons, 79-byte printable name) are the
-    helper's: anything wider is refused there. Keep them equal.
+    buttons, 79-byte printable name) are the helper's: anything wider is refused there.
+    Keep them equal.
   - The helper acks kernel FF uploads itself; local uinput acks at once in `poll`. Either way the
     game never waits on the headset.
   - A closed connection drops its wheels on the helper: the next send fails and `manager` recreates
