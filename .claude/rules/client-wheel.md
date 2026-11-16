@@ -32,6 +32,7 @@ paths:
   - An erase of an effect that never reached the wheel just drops its pending entry.
   - A batch applies every erase before any upload: an erase frees the slot a new one needs.
 - Permission is checked with `UsbManager.hasPermission`, never from the intent extra.
-- Not yet checked on hardware: the mode switch message and its endpoint (usb_modeswitch's
-  046d:c261 entry), and the HID++ parameter layouts. `log_wheel_ff` logs each FF request.
+- Checked on a Quest 3 + G920 (2026-11-15): the mode switch (it comes back as 046d:c262),
+  descriptor-mapped input in Assetto Corsa, and HID++ force feedback. `log_wheel_ff` logs
+  each FF request with its slot and result.
 - Tests: `client/tests/wheel_ut.cpp` (CI: Sockets-UT `wheel_ut`).
